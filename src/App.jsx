@@ -278,27 +278,72 @@ function CriticalityDot({ value, onChange }) {
   );
 }
 
+// One ruleset's citation + full-rule paste box within the expanded "Full rule" row.
+function RulesetRuleBlock({ label, citation, fullRule, editing, draftText, onCitationChange, onDraftChange, onStartEdit, onSave }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{label}</div>
+      <input
+        style={{ ...S.input, ...S.mono, fontSize: 12, marginBottom: 6 }}
+        placeholder="Rule citation (e.g. EV.6.6.2)"
+        defaultValue={citation || ""}
+        onBlur={(e) => onCitationChange(e.target.value.trim())}
+      />
+      {editing ? (
+        <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+          <textarea
+            style={{ ...S.input, minHeight: 70, lineHeight: 1.5, flex: 1 }}
+            placeholder="Paste the full rule text here so you don't have to look it up every time…"
+            value={draftText ?? ""}
+            onChange={(e) => onDraftChange(e.target.value)}
+          />
+          <button style={{ ...S.btnPrimary, padding: "4px 10px" }} onClick={onSave} title="Save">
+            ✓
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <div style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", flex: 1 }}>{fullRule || "—"}</div>
+          <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px" }} onClick={onStartEdit}>
+            Edit
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ValidationTable({ rows, onUpdate }) {
-  const [draft, setDraft] = useState({ item: "", rule: "", ruleset: "Both", method: "" });
+  const [draft, setDraft] = useState({ item: "", ruleset: "Both", method: "" });
   const [expanded, setExpanded] = useState(() => new Set());
-  const [ruleEditing, setRuleEditing] = useState(() => new Set());
+  const [ruleEditing, setRuleEditing] = useState(() => new Set()); // keys: `${id}:de` / `${id}:mi`
   const [ruleDraft, setRuleDraft] = useState({});
   const add = () => {
     if (!draft.item.trim()) return;
-    onUpdate([...rows, { id: uid(), ...draft, criticality: "Relevant", fullRule: "", status: "Open" }]);
-    setDraft({ item: "", rule: "", ruleset: draft.ruleset, method: "" });
+    onUpdate([...rows, { id: uid(), ...draft, criticality: "Relevant", status: "Open" }]);
+    setDraft({ item: "", ruleset: draft.ruleset, method: "" });
   };
   const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const rsShort = (rs) => (rs === "Michigan (FSAE)" ? "FSAE" : rs === "Germany (FSG)" ? "FSG" : "Both");
-  const startRuleEdit = (r) => {
-    setRuleDraft((d) => ({ ...d, [r.id]: r.fullRule || "" }));
-    setRuleEditing((prev) => new Set(prev).add(r.id));
+
+  const combinedCitation = (r) => {
+    const parts = [];
+    if (r.germanCitation) parts.push(`FSG ${r.germanCitation}`);
+    if (r.michiganCitation) parts.push(`FSAE ${r.michiganCitation}`);
+    return parts.length ? parts.join(" / ") : r.rule || "—"; // r.rule: legacy fallback for older rows
   };
-  const saveRuleEdit = (id) => {
-    set(id, { fullRule: (ruleDraft[id] ?? "").trim() });
+
+  const startRuleEdit = (r, lang) => {
+    const key = `${r.id}:${lang}`;
+    setRuleDraft((d) => ({ ...d, [key]: (lang === "de" ? r.germanRule : r.michiganRule) || "" }));
+    setRuleEditing((prev) => new Set(prev).add(key));
+  };
+  const saveRuleEdit = (r, lang) => {
+    const key = `${r.id}:${lang}`;
+    set(r.id, { [lang === "de" ? "germanRule" : "michiganRule"]: (ruleDraft[key] ?? "").trim() });
     setRuleEditing((prev) => {
       const next = new Set(prev);
-      next.delete(id);
+      next.delete(key);
       return next;
     });
   };
@@ -310,8 +355,12 @@ function ValidationTable({ rows, onUpdate }) {
       else next.add(r.id);
       return next;
     });
-    if (willOpen && !r.fullRule) startRuleEdit(r);
+    if (willOpen) {
+      if (!r.germanRule) startRuleEdit(r, "de");
+      if (!r.michiganRule) startRuleEdit(r, "mi");
+    }
   };
+
   return (
     <div>
       <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#666", marginBottom: 8 }}>
@@ -327,7 +376,7 @@ function ValidationTable({ rows, onUpdate }) {
         <tr>
           <th style={{ ...S.th, width: 200 }}>Item to validate</th>
           <th style={{ ...S.th, width: 130 }}>Ruleset</th>
-          <th style={{ ...S.th, width: 150 }}>Rule citation</th>
+          <th style={{ ...S.th, width: 170 }}>Rule citation</th>
           <th style={{ ...S.th, width: 180 }}>Method / evidence</th>
           <th style={{ ...S.th, width: 90 }}>Status</th>
           <th style={{ ...S.th, width: 30 }}></th>
@@ -362,7 +411,7 @@ function ValidationTable({ rows, onUpdate }) {
                   ))}
                 </select>
               </td>
-              <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.rule || "—"}</td>
+              <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{combinedCitation(r)}</td>
               <td style={S.td}>{r.method || "—"}</td>
               <td style={S.td}>
                 <StatusChip value={r.status} options={VAL_STATUSES} onChange={(v) => set(r.id, { status: v })} />
@@ -374,27 +423,30 @@ function ValidationTable({ rows, onUpdate }) {
             {expanded.has(r.id) && (
               <tr>
                 <td style={{ ...S.td, background: "#fafafa" }} colSpan={6}>
-                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>Full rule text</div>
-                  {ruleEditing.has(r.id) ? (
-                    <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                      <textarea
-                        style={{ ...S.input, minHeight: 70, lineHeight: 1.5, flex: 1 }}
-                        placeholder="Paste the full rule text here so you don't have to look it up every time…"
-                        value={ruleDraft[r.id] ?? ""}
-                        onChange={(e) => setRuleDraft((d) => ({ ...d, [r.id]: e.target.value }))}
-                      />
-                      <button style={{ ...S.btnPrimary, padding: "4px 10px" }} onClick={() => saveRuleEdit(r.id)} title="Save">
-                        ✓
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                      <div style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", flex: 1 }}>{r.fullRule || "—"}</div>
-                      <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px" }} onClick={() => startRuleEdit(r)}>
-                        Edit
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                    <RulesetRuleBlock
+                      label="Germany (FSG)"
+                      citation={r.germanCitation}
+                      fullRule={r.germanRule}
+                      editing={ruleEditing.has(`${r.id}:de`)}
+                      draftText={ruleDraft[`${r.id}:de`]}
+                      onCitationChange={(v) => set(r.id, { germanCitation: v })}
+                      onDraftChange={(v) => setRuleDraft((d) => ({ ...d, [`${r.id}:de`]: v }))}
+                      onStartEdit={() => startRuleEdit(r, "de")}
+                      onSave={() => saveRuleEdit(r, "de")}
+                    />
+                    <RulesetRuleBlock
+                      label="Michigan (FSAE)"
+                      citation={r.michiganCitation}
+                      fullRule={r.michiganRule}
+                      editing={ruleEditing.has(`${r.id}:mi`)}
+                      draftText={ruleDraft[`${r.id}:mi`]}
+                      onCitationChange={(v) => set(r.id, { michiganCitation: v })}
+                      onDraftChange={(v) => setRuleDraft((d) => ({ ...d, [`${r.id}:mi`]: v }))}
+                      onStartEdit={() => startRuleEdit(r, "mi")}
+                      onSave={() => saveRuleEdit(r, "mi")}
+                    />
+                  </div>
                 </td>
               </tr>
             )}
@@ -411,9 +463,7 @@ function ValidationTable({ rows, onUpdate }) {
               ))}
             </select>
           </td>
-          <td style={S.td}>
-            <input style={{ ...S.input, ...S.mono, fontSize: 12 }} placeholder="EV.6.6.2 / EV3.2.3" value={draft.rule} onChange={(e) => setDraft({ ...draft, rule: e.target.value })} />
-          </td>
+          <td style={{ ...S.td, color: "#999", fontSize: 12 }}>Add citation after creating</td>
           <td style={S.td}>
             <input style={S.input} placeholder="Calc / test / inspection" value={draft.method} onChange={(e) => setDraft({ ...draft, method: e.target.value })} />
           </td>
