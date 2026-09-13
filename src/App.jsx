@@ -281,6 +281,8 @@ function CriticalityDot({ value, onChange }) {
 function ValidationTable({ rows, onUpdate }) {
   const [draft, setDraft] = useState({ item: "", rule: "", ruleset: "Both", method: "" });
   const [expanded, setExpanded] = useState(() => new Set());
+  const [ruleEditing, setRuleEditing] = useState(() => new Set());
+  const [ruleDraft, setRuleDraft] = useState({});
   const add = () => {
     if (!draft.item.trim()) return;
     onUpdate([...rows, { id: uid(), ...draft, criticality: "Relevant", fullRule: "", status: "Open" }]);
@@ -288,13 +290,28 @@ function ValidationTable({ rows, onUpdate }) {
   };
   const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const rsShort = (rs) => (rs === "Michigan (FSAE)" ? "FSAE" : rs === "Germany (FSG)" ? "FSG" : "Both");
-  const toggleExpanded = (id) =>
-    setExpanded((prev) => {
+  const startRuleEdit = (r) => {
+    setRuleDraft((d) => ({ ...d, [r.id]: r.fullRule || "" }));
+    setRuleEditing((prev) => new Set(prev).add(r.id));
+  };
+  const saveRuleEdit = (id) => {
+    set(id, { fullRule: (ruleDraft[id] ?? "").trim() });
+    setRuleEditing((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.delete(id);
       return next;
     });
+  };
+  const toggleExpanded = (r) => {
+    const willOpen = !expanded.has(r.id);
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(r.id)) next.delete(r.id);
+      else next.add(r.id);
+      return next;
+    });
+    if (willOpen && !r.fullRule) startRuleEdit(r);
+  };
   return (
     <div>
       <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#666", marginBottom: 8 }}>
@@ -326,7 +343,7 @@ function ValidationTable({ rows, onUpdate }) {
                   <div>
                     <div>{r.item}</div>
                     <button
-                      onClick={() => toggleExpanded(r.id)}
+                      onClick={() => toggleExpanded(r)}
                       style={{ border: "none", background: "none", color: "#666", fontSize: 11, cursor: "pointer", padding: 0, marginTop: 2 }}
                     >
                       {expanded.has(r.id) ? "▾ Full rule" : "▸ Full rule"}
@@ -358,12 +375,26 @@ function ValidationTable({ rows, onUpdate }) {
               <tr>
                 <td style={{ ...S.td, background: "#fafafa" }} colSpan={6}>
                   <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>Full rule text</div>
-                  <textarea
-                    style={{ ...S.input, minHeight: 70, lineHeight: 1.5, width: "100%" }}
-                    placeholder="Paste the full rule text here so you don't have to look it up every time…"
-                    defaultValue={r.fullRule || ""}
-                    onBlur={(e) => set(r.id, { fullRule: e.target.value })}
-                  />
+                  {ruleEditing.has(r.id) ? (
+                    <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <textarea
+                        style={{ ...S.input, minHeight: 70, lineHeight: 1.5, flex: 1 }}
+                        placeholder="Paste the full rule text here so you don't have to look it up every time…"
+                        value={ruleDraft[r.id] ?? ""}
+                        onChange={(e) => setRuleDraft((d) => ({ ...d, [r.id]: e.target.value }))}
+                      />
+                      <button style={{ ...S.btnPrimary, padding: "4px 10px" }} onClick={() => saveRuleEdit(r.id)} title="Save">
+                        ✓
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                      <div style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", flex: 1 }}>{r.fullRule || "—"}</div>
+                      <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px" }} onClick={() => startRuleEdit(r)}>
+                        Edit
+                      </button>
+                    </div>
+                  )}
                 </td>
               </tr>
             )}
