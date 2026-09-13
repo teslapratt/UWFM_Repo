@@ -693,57 +693,99 @@ function LinkRow({ label, url, placeholder, onChange }) {
   );
 }
 
-function InfoTab({ info, onUpdate, isAdmin }) {
-  const [desc, setDesc] = useState(info.description || "");
-  const [extraDraft, setExtraDraft] = useState({ label: "", url: "" });
-  const [pastDraft, setPastDraft] = useState({ label: "", url: "" });
-  const links = info.links || [];
-  const past = info.pastResources || [];
-
-  // ── project picture (stored under its own storage key)
+// Generic single-photo upload/replace/remove slot, backed by its own storage key.
+// Used for the main project picture, last year's photo, and the vision board.
+function ImageSlot({ label, imageId, prefix, onChange, compact }) {
   const [imgData, setImgData] = useState(null);
-  const [imgUploading, setImgUploading] = useState(false);
-  const imgRef = React.useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const ref = React.useRef(null);
 
   useEffect(() => {
     let live = true;
-    if (info.imageId) {
+    if (imageId) {
       window.storage
-        .get("uwfm-projimg:" + info.imageId, true)
+        .get(prefix + imageId, true)
         .then((r) => live && r && setImgData(r.value))
         .catch(() => live && setImgData(null));
     } else {
       setImgData(null);
     }
     return () => { live = false; };
-  }, [info.imageId]);
+  }, [imageId]); // eslint-disable-line
 
-  const uploadImg = async (file) => {
+  const upload = async (file) => {
     if (!file) return;
-    setImgUploading(true);
+    setUploading(true);
     try {
-      const dataUrl = await resizeImage(file, 1200, 0.75);
+      const dataUrl = await resizeImage(file, compact ? 800 : 1200, 0.75);
       const id = uid();
-      await window.storage.set("uwfm-projimg:" + id, dataUrl, true);
-      if (info.imageId) {
-        try { await window.storage.delete("uwfm-projimg:" + info.imageId, true); } catch { /* gone */ }
+      await window.storage.set(prefix + id, dataUrl, true);
+      if (imageId) {
+        try { await window.storage.delete(prefix + imageId, true); } catch { /* gone */ }
       }
       setImgData(dataUrl);
-      onUpdate({ ...info, imageId: id });
-      if (imgRef.current) imgRef.current.value = "";
+      onChange(id);
+      if (ref.current) ref.current.value = "";
     } catch {
       alert("Couldn't process that image.");
     }
-    setImgUploading(false);
+    setUploading(false);
   };
 
-  const removeImg = async () => {
-    if (info.imageId) {
-      try { await window.storage.delete("uwfm-projimg:" + info.imageId, true); } catch { /* gone */ }
+  const remove = async () => {
+    if (imageId) {
+      try { await window.storage.delete(prefix + imageId, true); } catch { /* gone */ }
     }
     setImgData(null);
-    onUpdate({ ...info, imageId: null });
+    onChange(null);
   };
+
+  return (
+    <div>
+      {label && <div style={{ fontWeight: 700, fontSize: compact ? 12 : 14, marginBottom: 6 }}>{label}</div>}
+      {imgData ? (
+        <div style={{ border: "1px solid #000" }}>
+          <img
+            src={imgData}
+            alt={label || "photo"}
+            style={{ width: "100%", height: compact ? 90 : undefined, objectFit: compact ? "cover" : undefined, display: "block" }}
+          />
+          <div style={{ display: "flex", borderTop: "1px solid #000" }}>
+            <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000", flex: 1, fontSize: compact ? 10 : 12, padding: compact ? "2px 4px" : undefined }} onClick={() => ref.current?.click()}>Replace</button>
+            <button style={{ ...S.btn, border: "none", flex: 1, fontSize: compact ? 10 : 12, padding: compact ? "2px 4px" : undefined, color: "#c11414" }} onClick={remove}>Remove</button>
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            border: "1px dashed #000",
+            padding: compact ? 10 : 24,
+            textAlign: "center",
+            fontSize: compact ? 10 : 12,
+            color: "#666",
+            cursor: "pointer",
+            height: compact ? 90 : undefined,
+            display: compact ? "flex" : undefined,
+            alignItems: compact ? "center" : undefined,
+            justifyContent: compact ? "center" : undefined,
+          }}
+          onClick={() => ref.current?.click()}
+        >
+          {uploading ? "Uploading…" : compact ? "+ Add photo" : "Click to add a picture (CAD render, assembly photo, schematic…)"}
+        </div>
+      )}
+      <input ref={ref} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => upload(e.target.files?.[0])} />
+    </div>
+  );
+}
+
+function InfoTab({ info, onUpdate, isAdmin }) {
+  const [desc, setDesc] = useState(info.description || "");
+  const [extraDraft, setExtraDraft] = useState({ label: "", url: "" });
+  const [pastDraft, setPastDraft] = useState({ label: "", url: "" });
+  const links = info.links || [];
+  const past = info.pastResources || [];
+  const visionBoard = info.visionBoard || [null, null, null];
 
   const addExtra = () => {
     if (!extraDraft.url.trim()) return;
@@ -779,23 +821,39 @@ function InfoTab({ info, onUpdate, isAdmin }) {
           <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
             Picture
           </div>
-          {imgData ? (
-            <div style={{ border: "1px solid #000" }}>
-              <img src={imgData} alt="project" style={{ width: "100%", display: "block" }} />
-              <div style={{ display: "flex", borderTop: "1px solid #000" }}>
-                <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000", flex: 1, fontSize: 12 }} onClick={() => imgRef.current?.click()}>Replace</button>
-                <button style={{ ...S.btn, border: "none", flex: 1, fontSize: 12, color: "#c11414" }} onClick={removeImg}>Remove</button>
-              </div>
+          <ImageSlot
+            imageId={info.imageId}
+            prefix="uwfm-projimg:"
+            onChange={(id) => onUpdate({ ...info, imageId: id })}
+          />
+
+          <div style={{ marginTop: 20 }}>
+            <ImageSlot
+              label="Last year's photo"
+              imageId={info.lastYearImageId}
+              prefix="uwfm-lastyear:"
+              onChange={(id) => onUpdate({ ...info, lastYearImageId: id })}
+            />
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Vision board</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+              {visionBoard.map((slotId, i) => (
+                <ImageSlot
+                  key={i}
+                  compact
+                  imageId={slotId}
+                  prefix="uwfm-vision:"
+                  onChange={(id) => {
+                    const next = [...visionBoard];
+                    next[i] = id;
+                    onUpdate({ ...info, visionBoard: next });
+                  }}
+                />
+              ))}
             </div>
-          ) : (
-            <div
-              style={{ border: "1px dashed #000", padding: 24, textAlign: "center", fontSize: 12, color: "#666", cursor: "pointer" }}
-              onClick={() => imgRef.current?.click()}
-            >
-              {imgUploading ? "Uploading…" : "Click to add a picture (CAD render, assembly photo, schematic…)"}
-            </div>
-          )}
-          <input ref={imgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => uploadImg(e.target.files?.[0])} />
+          </div>
         </div>
       </div>
 
