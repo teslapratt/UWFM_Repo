@@ -1307,6 +1307,8 @@ function AdminHome({ store, setStore, openProject }) {
   const [name, setName] = useState("");
   const [member, setMember] = useState("");
   const [copied, setCopied] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState({ name: "", member: "", code: "" });
 
   const create = () => {
     if (!name.trim()) return;
@@ -1321,6 +1323,24 @@ function AdminHome({ store, setStore, openProject }) {
       setCopied(p.id);
       setTimeout(() => setCopied(null), 1500);
     });
+  };
+
+  const startEdit = (p) => {
+    setEditingId(p.id);
+    setEditDraft({ name: p.name, member: p.member || "", code: p.code });
+  };
+
+  const saveEdit = () => {
+    if (!editDraft.name.trim() || !editDraft.code.trim()) return;
+    setStore({
+      ...store,
+      projects: store.projects.map((x) =>
+        x.id === editingId
+          ? { ...x, name: editDraft.name.trim(), member: editDraft.member.trim(), code: editDraft.code.trim().toUpperCase() }
+          : x
+      ),
+    });
+    setEditingId(null);
   };
 
   const dragId = React.useRef(null);
@@ -1354,7 +1374,7 @@ function AdminHome({ store, setStore, openProject }) {
             return (
               <tr
                 key={p.id}
-                draggable
+                draggable={editingId !== p.id}
                 onDragStart={() => { dragId.current = p.id; }}
                 onDragOver={(e) => { e.preventDefault(); reorderProjects(p.id); }}
                 onDragEnd={() => { dragId.current = null; }}
@@ -1362,27 +1382,53 @@ function AdminHome({ store, setStore, openProject }) {
                 <td style={{ ...S.td, cursor: "grab", color: "#999", textAlign: "center", fontSize: 14 }} title="Drag to reorder">
                   ⠿
                 </td>
-                <td style={{ ...S.td, fontWeight: 600, cursor: "pointer" }} onClick={() => openProject(p.id)}>
-                  {p.name}
-                </td>
-                <td style={S.td}>{p.member || "—"}</td>
-                <td style={{ ...S.td, ...S.mono }}>{p.code}</td>
+                {editingId === p.id ? (
+                  <>
+                    <td style={S.td}>
+                      <input style={S.input} value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && saveEdit()} />
+                    </td>
+                    <td style={S.td}>
+                      <input style={S.input} value={editDraft.member} onChange={(e) => setEditDraft({ ...editDraft, member: e.target.value })} onKeyDown={(e) => e.key === "Enter" && saveEdit()} />
+                    </td>
+                    <td style={S.td}>
+                      <input style={{ ...S.input, ...S.mono }} value={editDraft.code} onChange={(e) => setEditDraft({ ...editDraft, code: e.target.value })} onKeyDown={(e) => e.key === "Enter" && saveEdit()} />
+                    </td>
+                  </>
+                ) : (
+                  <>
+                    <td style={{ ...S.td, fontWeight: 600, cursor: "pointer" }} onClick={() => openProject(p.id)}>
+                      {p.name}
+                    </td>
+                    <td style={S.td}>{p.member || "—"}</td>
+                    <td style={{ ...S.td, ...S.mono }}>{p.code}</td>
+                  </>
+                )}
                 <td style={{ ...S.td, ...S.mono }}>{open}</td>
                 <td style={{ ...S.td, ...S.mono, color: od ? "#c11414" : undefined, fontWeight: od ? 700 : 400 }}>{od}</td>
                 <td style={{ ...S.td, ...S.mono, color: req ? ACCENT : undefined, fontWeight: req ? 700 : 400 }}>{req}</td>
                 <td style={S.td}>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button style={S.btn} onClick={() => openProject(p.id)}>Open</button>
-                    <button style={S.btn} onClick={() => copyCode(p)}>{copied === p.id ? "Copied" : "Copy invite"}</button>
-                    <button
-                      style={{ ...S.btn, color: "#c11414", borderColor: "#c11414" }}
-                      onClick={() => {
-                        if (window.confirm(`Delete project "${p.name}" and all its data?`))
-                          setStore({ ...store, projects: store.projects.filter((x) => x.id !== p.id) });
-                      }}
-                    >
-                      Delete
-                    </button>
+                    {editingId === p.id ? (
+                      <>
+                        <button style={S.btnPrimary} onClick={saveEdit}>Save</button>
+                        <button style={S.btn} onClick={() => setEditingId(null)}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button style={S.btn} onClick={() => openProject(p.id)}>Open</button>
+                        <button style={S.btn} onClick={() => startEdit(p)}>Edit</button>
+                        <button style={S.btn} onClick={() => copyCode(p)}>{copied === p.id ? "Copied" : "Copy invite"}</button>
+                        <button
+                          style={{ ...S.btn, color: "#c11414", borderColor: "#c11414" }}
+                          onClick={() => {
+                            if (window.confirm(`Delete project "${p.name}" and all its data?`))
+                              setStore({ ...store, projects: store.projects.filter((x) => x.id !== p.id) });
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
                   </div>
                 </td>
               </tr>
