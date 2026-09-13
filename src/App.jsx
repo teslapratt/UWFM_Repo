@@ -1051,6 +1051,7 @@ function EtrainHome({ home, onChangeHome, isAdmin, defaultName }) {
         photos: [{ id, caption: caption.trim(), author: photoName.trim() || "anon", date: new Date().toISOString() }, ...home.photos],
       });
       setCaption("");
+      setPhotoName("");
       if (fileRef.current) fileRef.current.value = "";
     } catch {
       alert("Couldn't process that image.");
