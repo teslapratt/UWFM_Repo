@@ -853,6 +853,8 @@ function InfoTab({ info, onUpdate, isAdmin }) {
 
 // ─── Project view (title-block header + sections) ───────────────────────────
 
+const TAB_ORDER_PREFIX = "uwfm-tab-order:";
+
 function ProjectView({ project, onChange, onBack, isAdmin }) {
   const [tab, setTab] = useState("info");
   const [tlView, setTlView] = useState("table"); // table | calendar
@@ -874,6 +876,34 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
     ["orders", `Part orders (${project.orders.length})`],
     ["notes", "Notes"],
   ];
+
+  // Members can drag their tabs into whatever order they like; the order is
+  // remembered per-project in this browser only (it's a personal view preference).
+  const canReorderTabs = !isAdmin;
+  const tabOrderKey = TAB_ORDER_PREFIX + project.id;
+  const [tabOrder, setTabOrder] = useState(() => {
+    if (!canReorderTabs) return tabs.map(([id]) => id);
+    try {
+      const saved = JSON.parse(localStorage.getItem(tabOrderKey) || "null");
+      if (Array.isArray(saved)) return saved;
+    } catch { /* ignore */ }
+    return tabs.map(([id]) => id);
+  });
+  const dragId = React.useRef(null);
+
+  const labelById = Object.fromEntries(tabs);
+  const knownIds = tabs.map(([id]) => id);
+  const orderedIds = [...tabOrder.filter((id) => knownIds.includes(id)), ...knownIds.filter((id) => !tabOrder.includes(id))];
+  const orderedTabs = orderedIds.map((id) => [id, labelById[id]]);
+
+  const reorderTabs = (targetId) => {
+    if (!dragId.current || dragId.current === targetId) return;
+    const next = orderedIds.filter((id) => id !== dragId.current);
+    const targetIdx = next.indexOf(targetId);
+    next.splice(targetIdx, 0, dragId.current);
+    setTabOrder(next);
+    try { localStorage.setItem(tabOrderKey, JSON.stringify(next)); } catch { /* ignore */ }
+  };
 
   return (
     <div>
@@ -902,16 +932,21 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
         {onBack && (
           <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000" }} onClick={onBack}>← All projects</button>
         )}
-        {tabs.map(([id, label]) => (
+        {orderedTabs.map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
+            draggable={canReorderTabs}
+            onDragStart={() => { dragId.current = id; }}
+            onDragOver={(e) => { if (canReorderTabs) { e.preventDefault(); reorderTabs(id); } }}
+            onDragEnd={() => { dragId.current = null; }}
             style={{
               ...S.btn,
               border: "none",
               borderBottom: tab === id ? `3px solid ${ACCENT}` : "3px solid transparent",
               fontWeight: tab === id ? 700 : 400,
               padding: "8px 14px",
+              cursor: canReorderTabs ? "grab" : "pointer",
             }}
           >
             {label}
