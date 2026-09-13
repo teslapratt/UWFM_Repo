@@ -251,21 +251,64 @@ function TaskTable({ rows, onUpdate, isAdmin }) {
 }
 
 const RULESETS = ["Michigan (FSAE)", "Germany (FSG)", "Both"];
+const CRITICALITY_LEVELS = ["Relevant", "Iffy", "Critical"];
+const criticalityColor = (c) => (c === "Critical" ? "#c11414" : c === "Iffy" ? "#c17d0a" : "#1a6dd1");
+
+function CriticalityDot({ value, onChange }) {
+  const v = value || "Relevant";
+  return (
+    <button
+      onClick={() => {
+        const i = CRITICALITY_LEVELS.indexOf(v);
+        onChange(CRITICALITY_LEVELS[(i + 1) % CRITICALITY_LEVELS.length]);
+      }}
+      title={`${v} — click to cycle`}
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: "50%",
+        background: criticalityColor(v),
+        border: "none",
+        cursor: "pointer",
+        padding: 0,
+        marginTop: 4,
+        flexShrink: 0,
+      }}
+    />
+  );
+}
 
 function ValidationTable({ rows, onUpdate }) {
   const [draft, setDraft] = useState({ item: "", rule: "", ruleset: "Both", method: "" });
+  const [expanded, setExpanded] = useState(() => new Set());
   const add = () => {
     if (!draft.item.trim()) return;
-    onUpdate([...rows, { id: uid(), ...draft, status: "Open" }]);
+    onUpdate([...rows, { id: uid(), ...draft, criticality: "Relevant", fullRule: "", status: "Open" }]);
     setDraft({ item: "", rule: "", ruleset: draft.ruleset, method: "" });
   };
   const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const rsShort = (rs) => (rs === "Michigan (FSAE)" ? "FSAE" : rs === "Germany (FSG)" ? "FSG" : "Both");
+  const toggleExpanded = (id) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+    <div>
+      <div style={{ display: "flex", gap: 16, fontSize: 11, color: "#666", marginBottom: 8 }}>
+        {CRITICALITY_LEVELS.map((level) => (
+          <span key={level} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: criticalityColor(level) }} />
+            {level}
+          </span>
+        ))}
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
       <thead>
         <tr>
-          <th style={S.th}>Item to validate</th>
+          <th style={{ ...S.th, width: 200 }}>Item to validate</th>
           <th style={{ ...S.th, width: 130 }}>Ruleset</th>
           <th style={{ ...S.th, width: 150 }}>Rule citation</th>
           <th style={{ ...S.th, width: 180 }}>Method / evidence</th>
@@ -275,28 +318,56 @@ function ValidationTable({ rows, onUpdate }) {
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r.id}>
-            <td style={S.td}>{r.item}</td>
-            <td style={S.td}>
-              <select
-                style={{ ...S.input, fontSize: 12, border: "1px solid #ddd" }}
-                value={r.ruleset || "Both"}
-                onChange={(e) => set(r.id, { ruleset: e.target.value })}
-              >
-                {RULESETS.map((rs) => (
-                  <option key={rs} value={rs}>{rsShort(rs)}</option>
-                ))}
-              </select>
-            </td>
-            <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.rule || "—"}</td>
-            <td style={S.td}>{r.method || "—"}</td>
-            <td style={S.td}>
-              <StatusChip value={r.status} options={VAL_STATUSES} onChange={(v) => set(r.id, { status: v })} />
-            </td>
-            <td style={S.td}>
-              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
-            </td>
-          </tr>
+          <React.Fragment key={r.id}>
+            <tr>
+              <td style={S.td}>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <CriticalityDot value={r.criticality} onChange={(v) => set(r.id, { criticality: v })} />
+                  <div>
+                    <div>{r.item}</div>
+                    <button
+                      onClick={() => toggleExpanded(r.id)}
+                      style={{ border: "none", background: "none", color: "#666", fontSize: 11, cursor: "pointer", padding: 0, marginTop: 2 }}
+                    >
+                      {expanded.has(r.id) ? "▾ Full rule" : "▸ Full rule"}
+                    </button>
+                  </div>
+                </div>
+              </td>
+              <td style={S.td}>
+                <select
+                  style={{ ...S.input, fontSize: 12, border: "1px solid #ddd" }}
+                  value={r.ruleset || "Both"}
+                  onChange={(e) => set(r.id, { ruleset: e.target.value })}
+                >
+                  {RULESETS.map((rs) => (
+                    <option key={rs} value={rs}>{rsShort(rs)}</option>
+                  ))}
+                </select>
+              </td>
+              <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.rule || "—"}</td>
+              <td style={S.td}>{r.method || "—"}</td>
+              <td style={S.td}>
+                <StatusChip value={r.status} options={VAL_STATUSES} onChange={(v) => set(r.id, { status: v })} />
+              </td>
+              <td style={S.td}>
+                <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+              </td>
+            </tr>
+            {expanded.has(r.id) && (
+              <tr>
+                <td style={{ ...S.td, background: "#fafafa" }} colSpan={6}>
+                  <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>Full rule text</div>
+                  <textarea
+                    style={{ ...S.input, minHeight: 70, lineHeight: 1.5, width: "100%" }}
+                    placeholder="Paste the full rule text here so you don't have to look it up every time…"
+                    defaultValue={r.fullRule || ""}
+                    onBlur={(e) => set(r.id, { fullRule: e.target.value })}
+                  />
+                </td>
+              </tr>
+            )}
+          </React.Fragment>
         ))}
         <tr>
           <td style={S.td}>
@@ -320,7 +391,8 @@ function ValidationTable({ rows, onUpdate }) {
           </td>
         </tr>
       </tbody>
-    </table>
+      </table>
+    </div>
   );
 }
 
