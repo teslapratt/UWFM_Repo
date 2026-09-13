@@ -1265,13 +1265,12 @@ function AdminHome({ store, setStore, openProject }) {
     });
   };
 
-  const moveProject = (id, dir) => {
-    const idx = store.projects.findIndex((p) => p.id === id);
-    const swapWith = idx + dir;
-    if (swapWith < 0 || swapWith >= store.projects.length) return;
-    const next = [...store.projects];
-    [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
-    setStore({ ...store, projects: next });
+  const dragId = React.useRef(null);
+  const reorderProjects = (targetId) => {
+    if (!dragId.current || dragId.current === targetId) return;
+    const ids = store.projects.map((p) => p.id).filter((id) => id !== dragId.current);
+    ids.splice(ids.indexOf(targetId), 0, dragId.current);
+    setStore({ ...store, projects: ids.map((id) => store.projects.find((p) => p.id === id)) });
   };
 
   return (
@@ -1290,31 +1289,20 @@ function AdminHome({ store, setStore, openProject }) {
           </tr>
         </thead>
         <tbody>
-          {store.projects.map((p, i) => {
+          {store.projects.map((p) => {
             const open = p.tasks.filter((t) => t.status !== "Complete").length;
             const od = [...p.tasks, ...p.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
             const req = p.orders.filter((o) => o.status === "Requested").length;
             return (
-              <tr key={p.id}>
-                <td style={S.td}>
-                  <div style={{ display: "flex", gap: 2 }}>
-                    <button
-                      style={{ ...S.btn, padding: "2px 6px", fontSize: 11 }}
-                      onClick={() => moveProject(p.id, -1)}
-                      disabled={i === 0}
-                      title="Move up"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      style={{ ...S.btn, padding: "2px 6px", fontSize: 11 }}
-                      onClick={() => moveProject(p.id, 1)}
-                      disabled={i === store.projects.length - 1}
-                      title="Move down"
-                    >
-                      ▼
-                    </button>
-                  </div>
+              <tr
+                key={p.id}
+                draggable
+                onDragStart={() => { dragId.current = p.id; }}
+                onDragOver={(e) => { e.preventDefault(); reorderProjects(p.id); }}
+                onDragEnd={() => { dragId.current = null; }}
+              >
+                <td style={{ ...S.td, cursor: "grab", color: "#999", textAlign: "center", fontSize: 14 }} title="Drag to reorder">
+                  ⠿
                 </td>
                 <td style={{ ...S.td, fontWeight: 600, cursor: "pointer" }} onClick={() => openProject(p.id)}>
                   {p.name}
