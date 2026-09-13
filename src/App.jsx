@@ -1,0 +1,1453 @@
+import React, { useState, useEffect, useCallback } from "react";
+
+// ─── UWFM Etrain Project Tracker ────────────────────────────────────────────
+// Drawing-sheet aesthetic: white ground, black hairlines, square corners.
+// One accent: HV orange, used only for actions and the active state.
+
+const ACCENT = "#4b2e83"; // UW purple
+const STORE_KEY = "uwfm-etrain-tracker-v1";
+
+const TASK_STATUSES = ["Not Started", "In Progress", "Blocked", "Complete"];
+const VAL_STATUSES = ["Open", "In Test", "Passed", "Failed"];
+const ORDER_STATUSES = ["Requested", "Approved", "Ordered", "Received"];
+const DELIV_STATUSES = ["Open", "Draft", "Submitted", "Accepted"];
+const CATEGORIES = ["Design", "Calcs", "CAD", "Testing", "Manufacturing", "Integration", "Review", "Purchasing"];
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const genCode = () =>
+  Array.from({ length: 6 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)]).join("");
+
+const emptyProject = (name, member) => ({
+  id: uid(),
+  name,
+  member,
+  code: genCode(),
+  createdAt: new Date().toISOString(),
+  tasks: [],
+  deliverables: [],
+  validations: [],
+  orders: [],
+  bom: [],
+  notes: "",
+  info: { description: "", mdsUrl: "", debriefUrl: "", links: [] },
+});
+
+const statusColor = (s) => {
+  if (["Complete", "Passed", "Received", "Accepted"].includes(s)) return "#0a7a2f";
+  if (["Blocked", "Failed"].includes(s)) return "#c11414";
+  if (["In Progress", "In Test", "Ordered", "Approved", "Submitted", "Draft"].includes(s)) return ACCENT;
+  return "#666";
+};
+
+const fmtDate = (d) => {
+  if (!d) return "—";
+  const [y, m, day] = d.split("-");
+  return `${m}/${day}`;
+};
+
+const isOverdue = (due, status) =>
+  due && !["Complete", "Passed", "Received", "Accepted"].includes(status) && new Date(due + "T23:59") < new Date();
+
+// ─── Storage layer ──────────────────────────────────────────────────────────
+
+async function loadStore() {
+  try {
+    const r = await window.storage.get(STORE_KEY, true);
+    return r ? JSON.parse(r.value) : { adminPin: null, projects: [] };
+  } catch {
+    return { adminPin: null, projects: [] };
+  }
+}
+
+async function saveStore(data) {
+  try {
+    await window.storage.set(STORE_KEY, JSON.stringify(data), true);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Shared UI primitives ───────────────────────────────────────────────────
+
+const S = {
+  input: {
+    border: "1px solid #000",
+    borderRadius: 0,
+    padding: "5px 8px",
+    fontSize: 13,
+    fontFamily: "inherit",
+    background: "#fff",
+    outline: "none",
+    width: "100%",
+    boxSizing: "border-box",
+  },
+  btn: {
+    border: "1px solid #000",
+    borderRadius: 0,
+    background: "#fff",
+    padding: "5px 14px",
+    fontSize: 13,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  btnPrimary: {
+    border: `1px solid ${ACCENT}`,
+    borderRadius: 0,
+    background: ACCENT,
+    color: "#fff",
+    padding: "5px 14px",
+    fontSize: 13,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  th: {
+    textAlign: "left",
+    fontWeight: 600,
+    fontSize: 12,
+    padding: "6px 8px",
+    borderBottom: "1px solid #000",
+    whiteSpace: "nowrap",
+  },
+  td: {
+    padding: "5px 8px",
+    borderBottom: "1px solid #ddd",
+    fontSize: 13,
+    verticalAlign: "top",
+  },
+  mono: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontVariantNumeric: "tabular-nums" },
+};
+
+function StatusChip({ value, options, onChange }) {
+  return (
+    <button
+      onClick={() => {
+        const i = options.indexOf(value);
+        onChange(options[(i + 1) % options.length]);
+      }}
+      title="Click to cycle status"
+      style={{
+        border: `1px solid ${statusColor(value)}`,
+        color: statusColor(value),
+        background: "#fff",
+        borderRadius: 0,
+        fontSize: 11,
+        padding: "2px 8px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {value}
+    </button>
+  );
+}
+
+function DelBtn({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      title="Delete row"
+      style={{ border: "none", background: "none", cursor: "pointer", color: "#999", fontSize: 13, padding: "0 4px" }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = "#c11414")}
+      onMouseLeave={(e) => (e.currentTarget.style.color = "#999")}
+    >
+      ✕
+    </button>
+  );
+}
+
+const LEAD_NAME = "Tesla Pratt";
+
+function LeadDot({ kind }) {
+  return (
+    <span
+      title={`${LEAD_NAME} added ${kind}`}
+      style={{
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: "50%",
+        background: ACCENT,
+        marginRight: 6,
+        verticalAlign: "middle",
+        cursor: "help",
+        flexShrink: 0,
+      }}
+    />
+  );
+}
+
+// ─── Row tables per section ─────────────────────────────────────────────────
+
+function TaskTable({ rows, onUpdate, isAdmin }) {
+  const [draft, setDraft] = useState({ name: "", start: "", due: "", category: "Design" });
+  const add = () => {
+    if (!draft.name.trim()) return;
+    onUpdate([...rows, { id: uid(), ...draft, status: "Not Started", addedByLead: !!isAdmin }]);
+    setDraft({ name: "", start: "", due: "", category: draft.category });
+  };
+  const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const sorted = [...rows].sort((a, b) => (a.due || "9999") < (b.due || "9999") ? -1 : 1);
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th style={S.th}>Task</th>
+          <th style={S.th}>Category</th>
+          <th style={{ ...S.th, width: 70 }}>Start</th>
+          <th style={{ ...S.th, width: 70 }}>Due</th>
+          <th style={{ ...S.th, width: 110 }}>Status</th>
+          <th style={{ ...S.th, width: 30 }}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map((r) => (
+          <tr key={r.id} style={isOverdue(r.due, r.status) ? { background: "#fdeeee" } : undefined}>
+            <td style={S.td}>{r.addedByLead && <LeadDot kind="item" />}{r.name}</td>
+            <td style={S.td}>{r.category}</td>
+            <td style={{ ...S.td, ...S.mono }}>{fmtDate(r.start)}</td>
+            <td style={{ ...S.td, ...S.mono, color: isOverdue(r.due, r.status) ? "#c11414" : undefined }}>
+              {fmtDate(r.due)}
+            </td>
+            <td style={S.td}>
+              <StatusChip value={r.status} options={TASK_STATUSES} onChange={(v) => set(r.id, { status: v })} />
+            </td>
+            <td style={S.td}>
+              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+            </td>
+          </tr>
+        ))}
+        <tr>
+          <td style={S.td}>
+            <input
+              style={S.input}
+              placeholder="New task"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && add()}
+            />
+          </td>
+          <td style={S.td}>
+            <select style={S.input} value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })}>
+              {CATEGORIES.map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </td>
+          <td style={S.td}>
+            <input type="date" style={{ ...S.input, ...S.mono, fontSize: 12 }} value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} />
+          </td>
+          <td style={S.td}>
+            <input type="date" style={{ ...S.input, ...S.mono, fontSize: 12 }} value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} />
+          </td>
+          <td style={S.td} colSpan={2}>
+            <button style={S.btnPrimary} onClick={add}>Add</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+const RULESETS = ["Michigan (FSAE)", "Germany (FSG)", "Both"];
+
+function ValidationTable({ rows, onUpdate }) {
+  const [draft, setDraft] = useState({ item: "", rule: "", ruleset: "Both", method: "" });
+  const add = () => {
+    if (!draft.item.trim()) return;
+    onUpdate([...rows, { id: uid(), ...draft, status: "Open" }]);
+    setDraft({ item: "", rule: "", ruleset: draft.ruleset, method: "" });
+  };
+  const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const rsShort = (rs) => (rs === "Michigan (FSAE)" ? "FSAE" : rs === "Germany (FSG)" ? "FSG" : "Both");
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th style={S.th}>Item to validate</th>
+          <th style={{ ...S.th, width: 130 }}>Ruleset</th>
+          <th style={{ ...S.th, width: 150 }}>Rule citation</th>
+          <th style={{ ...S.th, width: 180 }}>Method / evidence</th>
+          <th style={{ ...S.th, width: 90 }}>Status</th>
+          <th style={{ ...S.th, width: 30 }}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.id}>
+            <td style={S.td}>{r.item}</td>
+            <td style={S.td}>
+              <select
+                style={{ ...S.input, fontSize: 12, border: "1px solid #ddd" }}
+                value={r.ruleset || "Both"}
+                onChange={(e) => set(r.id, { ruleset: e.target.value })}
+              >
+                {RULESETS.map((rs) => (
+                  <option key={rs} value={rs}>{rsShort(rs)}</option>
+                ))}
+              </select>
+            </td>
+            <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.rule || "—"}</td>
+            <td style={S.td}>{r.method || "—"}</td>
+            <td style={S.td}>
+              <StatusChip value={r.status} options={VAL_STATUSES} onChange={(v) => set(r.id, { status: v })} />
+            </td>
+            <td style={S.td}>
+              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+            </td>
+          </tr>
+        ))}
+        <tr>
+          <td style={S.td}>
+            <input style={S.input} placeholder="e.g. Fuse DC rating vs pack short-circuit current" value={draft.item} onChange={(e) => setDraft({ ...draft, item: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+          </td>
+          <td style={S.td}>
+            <select style={{ ...S.input, fontSize: 12 }} value={draft.ruleset} onChange={(e) => setDraft({ ...draft, ruleset: e.target.value })}>
+              {RULESETS.map((rs) => (
+                <option key={rs} value={rs}>{rs}</option>
+              ))}
+            </select>
+          </td>
+          <td style={S.td}>
+            <input style={{ ...S.input, ...S.mono, fontSize: 12 }} placeholder="EV.6.6.2 / EV3.2.3" value={draft.rule} onChange={(e) => setDraft({ ...draft, rule: e.target.value })} />
+          </td>
+          <td style={S.td}>
+            <input style={S.input} placeholder="Calc / test / inspection" value={draft.method} onChange={(e) => setDraft({ ...draft, method: e.target.value })} />
+          </td>
+          <td style={S.td} colSpan={2}>
+            <button style={S.btnPrimary} onClick={add}>Add</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function DeliverableTable({ rows, onUpdate, isAdmin }) {
+  const [draft, setDraft] = useState({ name: "", due: "" });
+  const add = () => {
+    if (!draft.name.trim()) return;
+    onUpdate([...rows, { id: uid(), ...draft, status: "Open", addedByLead: !!isAdmin }]);
+    setDraft({ name: "", due: "" });
+  };
+  const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th style={S.th}>Deliverable</th>
+          <th style={{ ...S.th, width: 70 }}>Due</th>
+          <th style={{ ...S.th, width: 100 }}>Status</th>
+          <th style={{ ...S.th, width: 30 }}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.id} style={isOverdue(r.due, r.status) ? { background: "#fdeeee" } : undefined}>
+            <td style={S.td}>{r.addedByLead && <LeadDot kind="deliverable" />}{r.name}</td>
+            <td style={{ ...S.td, ...S.mono }}>{fmtDate(r.due)}</td>
+            <td style={S.td}>
+              <StatusChip value={r.status} options={DELIV_STATUSES} onChange={(v) => set(r.id, { status: v })} />
+            </td>
+            <td style={S.td}>
+              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+            </td>
+          </tr>
+        ))}
+        <tr>
+          <td style={S.td}>
+            <input style={S.input} placeholder="e.g. Gusset FEA report, CDR slide deck" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+          </td>
+          <td style={S.td}>
+            <input type="date" style={{ ...S.input, ...S.mono, fontSize: 12 }} value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} />
+          </td>
+          <td style={S.td} colSpan={2}>
+            <button style={S.btnPrimary} onClick={add}>Add</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function OrderTable({ rows, onUpdate, isAdmin }) {
+  const [draft, setDraft] = useState({ part: "", vendor: "", qty: "", cost: "", link: "" });
+  const add = () => {
+    if (!draft.part.trim()) return;
+    onUpdate([...rows, { id: uid(), ...draft, status: "Requested" }]);
+    setDraft({ part: "", vendor: "", qty: "", cost: "", link: "" });
+  };
+  const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr>
+          <th style={S.th}>Part / PN</th>
+          <th style={{ ...S.th, width: 110 }}>Vendor</th>
+          <th style={{ ...S.th, width: 50 }}>Qty</th>
+          <th style={{ ...S.th, width: 80 }}>Est. cost</th>
+          <th style={{ ...S.th, width: 100 }}>Status</th>
+          <th style={{ ...S.th, width: 30 }}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.id}>
+            <td style={S.td}>
+              {r.link ? (
+                <a href={r.link} target="_blank" rel="noreferrer" style={{ color: "#000" }}>{r.part}</a>
+              ) : (
+                r.part
+              )}
+            </td>
+            <td style={S.td}>{r.vendor || "—"}</td>
+            <td style={{ ...S.td, ...S.mono }}>{r.qty || "—"}</td>
+            <td style={{ ...S.td, ...S.mono }}>{r.cost ? `$${r.cost}` : "—"}</td>
+            <td style={S.td}>
+              {isAdmin ? (
+                <StatusChip value={r.status} options={ORDER_STATUSES} onChange={(v) => set(r.id, { status: v })} />
+              ) : (
+                <span style={{ fontSize: 11, color: statusColor(r.status), border: `1px solid ${statusColor(r.status)}`, padding: "2px 8px", whiteSpace: "nowrap" }}>{r.status}</span>
+              )}
+            </td>
+            <td style={S.td}>
+              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+            </td>
+          </tr>
+        ))}
+        <tr>
+          <td style={S.td}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <input style={S.input} placeholder="Part name / PN" value={draft.part} onChange={(e) => setDraft({ ...draft, part: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+              <input style={{ ...S.input, fontSize: 11 }} placeholder="Link (optional)" value={draft.link} onChange={(e) => setDraft({ ...draft, link: e.target.value })} />
+            </div>
+          </td>
+          <td style={S.td}>
+            <input style={S.input} placeholder="Vendor" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
+          </td>
+          <td style={S.td}>
+            <input style={{ ...S.input, ...S.mono }} placeholder="#" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
+          </td>
+          <td style={S.td}>
+            <input style={{ ...S.input, ...S.mono }} placeholder="$" value={draft.cost} onChange={(e) => setDraft({ ...draft, cost: e.target.value })} />
+          </td>
+          <td style={S.td} colSpan={2}>
+            <button style={S.btnPrimary} onClick={add}>Request</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
+function BOMTable({ rows, onUpdate }) {
+  const [draft, setDraft] = useState({ pn: "", desc: "", qty: "", unitCost: "", source: "" });
+  const add = () => {
+    if (!draft.pn.trim() && !draft.desc.trim()) return;
+    onUpdate([...rows, { id: uid(), ...draft }]);
+    setDraft({ pn: "", desc: "", qty: "", unitCost: "", source: "" });
+  };
+  const totalCost = rows.reduce((s, r) => s + (parseFloat(r.qty) || 0) * (parseFloat(r.unitCost) || 0), 0);
+  return (
+    <div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th style={{ ...S.th, width: 160 }}>Part number</th>
+            <th style={S.th}>Description</th>
+            <th style={{ ...S.th, width: 55 }}>Qty</th>
+            <th style={{ ...S.th, width: 85 }}>Unit cost</th>
+            <th style={{ ...S.th, width: 90 }}>Ext. cost</th>
+            <th style={{ ...S.th, width: 130 }}>Source / vendor</th>
+            <th style={{ ...S.th, width: 30 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const ext = (parseFloat(r.qty) || 0) * (parseFloat(r.unitCost) || 0);
+            return (
+              <tr key={r.id}>
+                <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.pn || "—"}</td>
+                <td style={S.td}>{r.desc}</td>
+                <td style={{ ...S.td, ...S.mono }}>{r.qty || "—"}</td>
+                <td style={{ ...S.td, ...S.mono }}>{r.unitCost ? `$${r.unitCost}` : "—"}</td>
+                <td style={{ ...S.td, ...S.mono }}>{ext ? `$${ext.toFixed(2)}` : "—"}</td>
+                <td style={S.td}>{r.source || "—"}</td>
+                <td style={S.td}>
+                  <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
+                </td>
+              </tr>
+            );
+          })}
+          <tr>
+            <td style={S.td}>
+              <input style={{ ...S.input, ...S.mono, fontSize: 12 }} placeholder="INR-21700-P45B" value={draft.pn} onChange={(e) => setDraft({ ...draft, pn: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+            </td>
+            <td style={S.td}>
+              <input style={S.input} placeholder="Description" value={draft.desc} onChange={(e) => setDraft({ ...draft, desc: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
+            </td>
+            <td style={S.td}>
+              <input style={{ ...S.input, ...S.mono }} placeholder="#" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
+            </td>
+            <td style={S.td}>
+              <input style={{ ...S.input, ...S.mono }} placeholder="$" value={draft.unitCost} onChange={(e) => setDraft({ ...draft, unitCost: e.target.value })} />
+            </td>
+            <td style={S.td}></td>
+            <td style={S.td}>
+              <input style={S.input} placeholder="Vendor / stock" value={draft.source} onChange={(e) => setDraft({ ...draft, source: e.target.value })} />
+            </td>
+            <td style={S.td}>
+              <button style={S.btnPrimary} onClick={add}>Add</button>
+            </td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td style={{ ...S.td, borderTop: "1px solid #000", fontWeight: 700 }} colSpan={4}>
+              Total ({rows.length} line items)
+            </td>
+            <td style={{ ...S.td, ...S.mono, borderTop: "1px solid #000", fontWeight: 700 }}>${totalCost.toFixed(2)}</td>
+            <td style={{ ...S.td, borderTop: "1px solid #000" }} colSpan={2}></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+// ─── Gantt bar view of the timeline ─────────────────────────────────────────
+
+const DAY_MS = 86400000;
+const toDate = (s) => new Date(s + "T00:00");
+
+function MonthCalendar({ tasks, deliverables }) {
+  const DAY_W = 26;
+  const NAME_W = 220;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const items = [
+    ...tasks.map((t) => ({ ...t, kind: "task", from: t.start || t.due, to: t.due || t.start })),
+    ...deliverables.map((d) => ({ ...d, kind: "deliv", from: d.due, to: d.due })),
+  ]
+    .filter((i) => i.from)
+    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : (a.to || a.from) < (b.to || b.from) ? -1 : 1));
+
+  if (items.length === 0)
+    return <div style={{ padding: 30, color: "#666", fontSize: 13, border: "1px solid #ddd" }}>No dated tasks or deliverables yet — add dates in the table view and they'll appear here.</div>;
+
+  // Range: min start → max due, padded 3 days each side, always including today.
+  let min = toDate(items[0].from);
+  let max = toDate(items[0].to || items[0].from);
+  items.forEach((i) => {
+    const f = toDate(i.from), t = toDate(i.to || i.from);
+    if (f < min) min = f;
+    if (t > max) max = t;
+  });
+  if (today < min) min = today;
+  if (today > max) max = today;
+  min = new Date(min.getTime() - 3 * DAY_MS);
+  max = new Date(max.getTime() + 3 * DAY_MS);
+  const nDays = Math.round((max - min) / DAY_MS) + 1;
+
+  const dayX = (d) => Math.round((toDate(typeof d === "string" ? d : dkeyStr(d)) - min) / DAY_MS) * DAY_W;
+  const dkeyStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const todayX = Math.round((today - min) / DAY_MS) * DAY_W;
+
+  // Month header segments
+  const months = [];
+  for (let i = 0; i < nDays; i++) {
+    const d = new Date(min.getTime() + i * DAY_MS);
+    const label = d.toLocaleString("default", { month: "short", year: "2-digit" });
+    if (!months.length || months[months.length - 1].label !== label) months.push({ label, start: i, count: 1 });
+    else months[months.length - 1].count++;
+  }
+
+  const ROW_H = 30;
+  const chartW = nDays * DAY_W;
+
+  return (
+    <div style={{ border: "1px solid #000", overflowX: "auto" }}>
+      <div style={{ display: "flex", minWidth: NAME_W + chartW }}>
+        {/* Fixed name column */}
+        <div style={{ width: NAME_W, flexShrink: 0, borderRight: "1px solid #000", position: "sticky", left: 0, background: "#fff", zIndex: 2 }}>
+          <div style={{ height: 42, borderBottom: "1px solid #000", display: "flex", alignItems: "flex-end", padding: "4px 8px", fontSize: 12, fontWeight: 600 }}>
+            Task / deliverable
+          </div>
+          {items.map((it) => (
+            <div key={it.id} style={{ height: ROW_H, borderBottom: "1px solid #eee", display: "flex", alignItems: "center", padding: "0 8px", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {it.kind === "deliv" ? "◆ " : ""}{it.name}
+            </div>
+          ))}
+        </div>
+
+        {/* Chart area */}
+        <div style={{ position: "relative", width: chartW }}>
+          {/* Month row */}
+          <div style={{ display: "flex", height: 20, borderBottom: "1px solid #ddd" }}>
+            {months.map((m, i) => (
+              <div key={i} style={{ width: m.count * DAY_W, fontSize: 11, fontWeight: 600, padding: "2px 4px", borderRight: "1px solid #ddd", whiteSpace: "nowrap", overflow: "hidden" }}>
+                {m.label}
+              </div>
+            ))}
+          </div>
+          {/* Day row */}
+          <div style={{ display: "flex", height: 22, borderBottom: "1px solid #000" }}>
+            {Array.from({ length: nDays }, (_, i) => {
+              const d = new Date(min.getTime() + i * DAY_MS);
+              const wknd = d.getDay() === 0 || d.getDay() === 6;
+              return (
+                <div key={i} style={{ width: DAY_W, fontSize: 9, textAlign: "center", paddingTop: 5, color: wknd ? "#bbb" : "#666", background: wknd ? "#fafafa" : "#fff", ...S.mono }}>
+                  {d.getDate()}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Grid + weekend shading behind bars */}
+          <div style={{ position: "relative", height: items.length * ROW_H }}>
+            {Array.from({ length: nDays }, (_, i) => {
+              const d = new Date(min.getTime() + i * DAY_MS);
+              const wknd = d.getDay() === 0 || d.getDay() === 6;
+              return (
+                <div key={i} style={{ position: "absolute", left: i * DAY_W, top: 0, bottom: 0, width: DAY_W, background: wknd ? "#fafafa" : "none", borderRight: "1px solid #f0f0f0" }} />
+              );
+            })}
+            {/* Row separators */}
+            {items.map((_, r) => (
+              <div key={r} style={{ position: "absolute", left: 0, right: 0, top: (r + 1) * ROW_H, borderTop: "1px solid #eee" }} />
+            ))}
+            {/* Today line */}
+            {todayX >= 0 && todayX <= chartW && (
+              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: -42, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
+            )}
+            {/* Bars */}
+            {items.map((it, r) => {
+              const c = statusColor(it.status);
+              const x = dayX(it.from);
+              const w = (Math.round((toDate(it.to || it.from) - toDate(it.from)) / DAY_MS) + 1) * DAY_W;
+              const late = isOverdue(it.to || it.from, it.status);
+              const tip = `${it.name} — ${it.status}\n${fmtDate(it.from)}${it.to !== it.from ? " → " + fmtDate(it.to) : ""}${late ? "  (OVERDUE)" : ""}`;
+              if (it.kind === "deliv")
+                return (
+                  <div key={it.id} title={tip} style={{ position: "absolute", left: x + DAY_W / 2 - 7, top: r * ROW_H + ROW_H / 2 - 7, width: 14, height: 14, background: c, transform: "rotate(45deg)", border: late ? "2px solid #c11414" : "none", cursor: "default" }} />
+                );
+              return (
+                <div
+                  key={it.id}
+                  title={tip}
+                  style={{
+                    position: "absolute",
+                    left: x,
+                    top: r * ROW_H + 6,
+                    width: Math.max(w, DAY_W) - 2,
+                    height: ROW_H - 12,
+                    background: c,
+                    border: late ? "2px solid #c11414" : "none",
+                    boxSizing: "border-box",
+                    cursor: "default",
+                    overflow: "hidden",
+                  }}
+                >
+                  <span style={{ color: "#fff", fontSize: 10, lineHeight: `${ROW_H - 12}px`, padding: "0 4px", whiteSpace: "nowrap" }}>{it.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <div style={{ borderTop: "1px solid #000", padding: "4px 8px", fontSize: 11, color: "#666", display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#666" }} /> Not started</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: ACCENT }} /> In progress</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#0a7a2f" }} /> Complete</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#c11414" }} /> Blocked</span>
+        <span>◆ deliverable · red outline = overdue · purple line = today</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Project information tab ────────────────────────────────────────────────
+
+function LinkRow({ label, url, placeholder, onChange }) {
+  const [editing, setEditing] = useState(!url);
+  const [val, setVal] = useState(url || "");
+  const save = () => { onChange(val.trim()); setEditing(false); };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid #ddd", padding: "8px 0" }}>
+      <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0 }}>{label}</span>
+      {editing ? (
+        <>
+          <input style={{ ...S.input, fontSize: 12 }} placeholder={placeholder} value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => e.key === "Enter" && save()} />
+          <button style={S.btnPrimary} onClick={save}>Save</button>
+        </>
+      ) : (
+        <>
+          <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: ACCENT, wordBreak: "break-all" }}>{url}</a>
+          <span style={{ flex: 1 }} />
+          <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px" }} onClick={() => setEditing(true)}>Edit</button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function InfoTab({ info, onUpdate, isAdmin }) {
+  const [desc, setDesc] = useState(info.description || "");
+  const [extraDraft, setExtraDraft] = useState({ label: "", url: "" });
+  const [pastDraft, setPastDraft] = useState({ label: "", url: "" });
+  const links = info.links || [];
+  const past = info.pastResources || [];
+
+  // ── project picture (stored under its own storage key)
+  const [imgData, setImgData] = useState(null);
+  const [imgUploading, setImgUploading] = useState(false);
+  const imgRef = React.useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    if (info.imageId) {
+      window.storage
+        .get("uwfm-projimg:" + info.imageId, true)
+        .then((r) => live && r && setImgData(r.value))
+        .catch(() => live && setImgData(null));
+    } else {
+      setImgData(null);
+    }
+    return () => { live = false; };
+  }, [info.imageId]);
+
+  const uploadImg = async (file) => {
+    if (!file) return;
+    setImgUploading(true);
+    try {
+      const dataUrl = await resizeImage(file, 1200, 0.75);
+      const id = uid();
+      await window.storage.set("uwfm-projimg:" + id, dataUrl, true);
+      if (info.imageId) {
+        try { await window.storage.delete("uwfm-projimg:" + info.imageId, true); } catch { /* gone */ }
+      }
+      setImgData(dataUrl);
+      onUpdate({ ...info, imageId: id });
+      if (imgRef.current) imgRef.current.value = "";
+    } catch {
+      alert("Couldn't process that image.");
+    }
+    setImgUploading(false);
+  };
+
+  const removeImg = async () => {
+    if (info.imageId) {
+      try { await window.storage.delete("uwfm-projimg:" + info.imageId, true); } catch { /* gone */ }
+    }
+    setImgData(null);
+    onUpdate({ ...info, imageId: null });
+  };
+
+  const addExtra = () => {
+    if (!extraDraft.url.trim()) return;
+    onUpdate({ ...info, links: [...links, { id: uid(), ...extraDraft, addedByLead: !!isAdmin }] });
+    setExtraDraft({ label: "", url: "" });
+  };
+
+  const addPast = () => {
+    if (!pastDraft.url.trim()) return;
+    onUpdate({ ...info, pastResources: [...past, { id: uid(), ...pastDraft, addedByLead: !!isAdmin }] });
+    setPastDraft({ label: "", url: "" });
+  };
+
+  return (
+    <div style={{ maxWidth: 980 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 20, alignItems: "start" }}>
+        {/* Description */}
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
+            Project description
+          </div>
+          <textarea
+            style={{ ...S.input, minHeight: 180, lineHeight: 1.5 }}
+            placeholder="Scope, interfaces, key requirements, what done looks like…"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            onBlur={() => onUpdate({ ...info, description: desc })}
+          />
+        </div>
+
+        {/* Picture */}
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
+            Picture
+          </div>
+          {imgData ? (
+            <div style={{ border: "1px solid #000" }}>
+              <img src={imgData} alt="project" style={{ width: "100%", display: "block" }} />
+              <div style={{ display: "flex", borderTop: "1px solid #000" }}>
+                <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000", flex: 1, fontSize: 12 }} onClick={() => imgRef.current?.click()}>Replace</button>
+                <button style={{ ...S.btn, border: "none", flex: 1, fontSize: 12, color: "#c11414" }} onClick={removeImg}>Remove</button>
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{ border: "1px dashed #000", padding: 24, textAlign: "center", fontSize: 12, color: "#666", cursor: "pointer" }}
+              onClick={() => imgRef.current?.click()}
+            >
+              {imgUploading ? "Uploading…" : "Click to add a picture (CAD render, assembly photo, schematic…)"}
+            </div>
+          )}
+          <input ref={imgRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => uploadImg(e.target.files?.[0])} />
+        </div>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, margin: "20px 0 4px" }}>
+        Key documents
+      </div>
+      <LinkRow
+        label="MDS"
+        url={info.mdsUrl}
+        placeholder="Link to Mechanical Design Spec (Drive/Docs URL)"
+        onChange={(v) => onUpdate({ ...info, mdsUrl: v })}
+      />
+      <LinkRow
+        label="Project debrief"
+        url={info.debriefUrl}
+        placeholder="Link to project debrief Google Doc"
+        onChange={(v) => onUpdate({ ...info, debriefUrl: v })}
+      />
+      {links.map((l) => (
+        <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid #ddd", padding: "8px 0" }}>
+          <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0, display: "flex", alignItems: "center" }}>{l.addedByLead && <LeadDot kind="link" />}{l.label || "Link"}</span>
+          <a href={l.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: ACCENT, wordBreak: "break-all" }}>{l.url}</a>
+          <span style={{ flex: 1 }} />
+          <DelBtn onClick={() => onUpdate({ ...info, links: links.filter((x) => x.id !== l.id) })} />
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, padding: "10px 0" }}>
+        <input style={{ ...S.input, width: 150 }} placeholder="Label (e.g. ADR deck)" value={extraDraft.label} onChange={(e) => setExtraDraft({ ...extraDraft, label: e.target.value })} />
+        <input style={{ ...S.input, flex: 1 }} placeholder="https://…" value={extraDraft.url} onChange={(e) => setExtraDraft({ ...extraDraft, url: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addExtra()} />
+        <button style={S.btn} onClick={addExtra}>Add link</button>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, margin: "20px 0 4px" }}>
+        Past resources
+      </div>
+      <div style={{ fontSize: 12, color: "#666", padding: "4px 0 6px" }}>
+        Prior-year documents, old ADRs, T37 debriefs, reference designs — anything from before this project.
+      </div>
+      {past.map((l) => (
+        <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid #ddd", padding: "8px 0" }}>
+          <span style={{ fontWeight: 600, fontSize: 13, width: 150, flexShrink: 0, display: "flex", alignItems: "center" }}>{l.addedByLead && <LeadDot kind="link" />}{l.label || "Resource"}</span>
+          <a href={l.url} target="_blank" rel="noreferrer" style={{ fontSize: 13, color: ACCENT, wordBreak: "break-all" }}>{l.url}</a>
+          <span style={{ flex: 1 }} />
+          <DelBtn onClick={() => onUpdate({ ...info, pastResources: past.filter((x) => x.id !== l.id) })} />
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, padding: "10px 0" }}>
+        <input style={{ ...S.input, width: 150 }} placeholder="Label (e.g. T37 LV debrief)" value={pastDraft.label} onChange={(e) => setPastDraft({ ...pastDraft, label: e.target.value })} />
+        <input style={{ ...S.input, flex: 1 }} placeholder="https://…" value={pastDraft.url} onChange={(e) => setPastDraft({ ...pastDraft, url: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addPast()} />
+        <button style={S.btn} onClick={addPast}>Add resource</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Project view (title-block header + sections) ───────────────────────────
+
+function ProjectView({ project, onChange, onBack, isAdmin }) {
+  const [tab, setTab] = useState("info");
+  const [tlView, setTlView] = useState("table"); // table | calendar
+  const patch = (p) => onChange({ ...project, ...p });
+  const bom = project.bom || [];
+  const info = project.info || { description: "", mdsUrl: "", debriefUrl: "", links: [] };
+
+  const openTasks = project.tasks.filter((t) => t.status !== "Complete").length;
+  const overdue = [...project.tasks, ...project.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
+  const valOpen = project.validations.filter((v) => !["Passed"].includes(v.status)).length;
+  const pendingOrders = project.orders.filter((o) => o.status === "Requested").length;
+
+  const tabs = [
+    ["info", "Information"],
+    ["timeline", `Timeline (${project.tasks.length})`],
+    ["deliverables", `Deliverables (${project.deliverables.length})`],
+    ["validation", `Validation & rules (${project.validations.length})`],
+    ["bom", `BOM (${bom.length})`],
+    ["orders", `Part orders (${project.orders.length})`],
+    ["notes", "Notes"],
+  ];
+
+  return (
+    <div>
+      {/* Title block */}
+      <div style={{ border: "1px solid #000", display: "grid", gridTemplateColumns: "1fr auto auto auto auto", marginBottom: 16 }}>
+        <div style={{ padding: "10px 14px", borderRight: "1px solid #000" }}>
+          <div style={{ fontSize: 11, color: "#666" }}>{isAdmin ? "Project" : "Your project"}</div>
+          <div style={{ fontSize: 20, fontWeight: 700 }}>{project.name}</div>
+          <div style={{ fontSize: 12, marginTop: 2 }}>Owner: {project.member || "unassigned"}</div>
+        </div>
+        {[
+          ["Open tasks", openTasks, "#000"],
+          ["Overdue", overdue, overdue ? "#c11414" : "#000"],
+          ["Validation open", valOpen, "#000"],
+          ["Orders pending", pendingOrders, pendingOrders ? ACCENT : "#000"],
+        ].map(([label, n, color]) => (
+          <div key={label} style={{ padding: "10px 14px", borderRight: "1px solid #000", textAlign: "right", minWidth: 90 }}>
+            <div style={{ fontSize: 11, color: "#666" }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color, ...S.mono }}>{n}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", borderBottom: "1px solid #000", marginBottom: 12, flexWrap: "wrap" }}>
+        {onBack && (
+          <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000" }} onClick={onBack}>← All projects</button>
+        )}
+        {tabs.map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            style={{
+              ...S.btn,
+              border: "none",
+              borderBottom: tab === id ? `3px solid ${ACCENT}` : "3px solid transparent",
+              fontWeight: tab === id ? 700 : 400,
+              padding: "8px 14px",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "timeline" && (
+        <div>
+          <div style={{ display: "inline-flex", border: "1px solid #000", marginBottom: 10 }}>
+            {[["table", "Table"], ["calendar", "Bar view"]].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setTlView(id)}
+                style={{
+                  ...S.btn,
+                  border: "none",
+                  background: tlView === id ? "#000" : "#fff",
+                  color: tlView === id ? "#fff" : "#000",
+                  fontSize: 12,
+                  padding: "4px 14px",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tlView === "table" ? (
+            <TaskTable rows={project.tasks} onUpdate={(tasks) => patch({ tasks })} isAdmin={isAdmin} />
+          ) : (
+            <MonthCalendar tasks={project.tasks} deliverables={project.deliverables} />
+          )}
+        </div>
+      )}
+      {tab === "info" && <InfoTab info={info} onUpdate={(i) => patch({ info: i })} isAdmin={isAdmin} />}
+      {tab === "deliverables" && <DeliverableTable rows={project.deliverables} onUpdate={(deliverables) => patch({ deliverables })} isAdmin={isAdmin} />}
+      {tab === "bom" && <BOMTable rows={bom} onUpdate={(b) => patch({ bom: b })} />}
+      {tab === "validation" && <ValidationTable rows={project.validations} onUpdate={(validations) => patch({ validations })} />}
+      {tab === "orders" && <OrderTable rows={project.orders} onUpdate={(orders) => patch({ orders })} isAdmin={isAdmin} />}
+      {tab === "notes" && (
+        <textarea
+          style={{ ...S.input, minHeight: 220, fontFamily: "inherit", lineHeight: 1.5 }}
+          placeholder="Design decisions, blockers, links, meeting notes…"
+          value={project.notes}
+          onChange={(e) => patch({ notes: e.target.value })}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Etrain Home (team page: weekly posts, pit schedule, photos) ────────────
+
+const emptyHome = { posts: [], pit: [], photos: [], gcalUrl: "" };
+const PHOTO_PREFIX = "uwfm-potd:";
+
+function resizeImage(file, maxDim = 1000, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("bad image")); };
+    img.src = url;
+  });
+}
+
+function EtrainHome({ home, onChangeHome, isAdmin, defaultName }) {
+  // ── posts
+  const [draftPost, setDraftPost] = useState({ title: "", body: "" });
+  const [editingId, setEditingId] = useState(null);
+  const [showPostForm, setShowPostForm] = useState(false);
+
+  const savePost = () => {
+    if (!draftPost.title.trim() && !draftPost.body.trim()) return;
+    if (editingId) {
+      onChangeHome({ ...home, posts: home.posts.map((p) => (p.id === editingId ? { ...p, ...draftPost } : p)) });
+    } else {
+      onChangeHome({ ...home, posts: [{ id: uid(), ...draftPost, date: new Date().toISOString() }, ...home.posts] });
+    }
+    setDraftPost({ title: "", body: "" });
+    setEditingId(null);
+    setShowPostForm(false);
+  };
+
+  // ── pit schedule
+  const [slot, setSlot] = useState({ name: defaultName || "", date: "", start: "", end: "", note: "" });
+  const addSlot = () => {
+    if (!slot.name.trim() || !slot.date || !slot.start) return;
+    onChangeHome({ ...home, pit: [...home.pit, { id: uid(), ...slot }] });
+    setSlot({ ...slot, date: "", start: "", end: "", note: "" });
+  };
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const upcoming = home.pit
+    .filter((s) => s.date >= todayStr)
+    .sort((a, b) => (a.date + a.start < b.date + b.start ? -1 : 1));
+  const byDate = upcoming.reduce((acc, s) => ((acc[s.date] = acc[s.date] || []).push(s), acc), {});
+
+  // ── photos
+  const [photoData, setPhotoData] = useState({});
+  const [caption, setCaption] = useState("");
+  const [photoName, setPhotoName] = useState(defaultName || "");
+  const [uploading, setUploading] = useState(false);
+  const fileRef = React.useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      for (const m of home.photos.slice(0, 24)) {
+        if (photoData[m.id]) continue;
+        try {
+          const r = await window.storage.get(PHOTO_PREFIX + m.id, true);
+          if (live && r) setPhotoData((d) => ({ ...d, [m.id]: r.value }));
+        } catch { /* missing photo */ }
+      }
+    })();
+    return () => { live = false; };
+  }, [home.photos]); // eslint-disable-line
+
+  const uploadPhoto = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const dataUrl = await resizeImage(file);
+      const id = uid();
+      await window.storage.set(PHOTO_PREFIX + id, dataUrl, true);
+      setPhotoData((d) => ({ ...d, [id]: dataUrl }));
+      onChangeHome({
+        ...home,
+        photos: [{ id, caption: caption.trim(), author: photoName.trim() || "anon", date: new Date().toISOString() }, ...home.photos],
+      });
+      setCaption("");
+      if (fileRef.current) fileRef.current.value = "";
+    } catch {
+      alert("Couldn't process that image.");
+    }
+    setUploading(false);
+  };
+
+  const deletePhoto = async (id) => {
+    try { await window.storage.delete(PHOTO_PREFIX + id, true); } catch { /* already gone */ }
+    setPhotoData((d) => { const n = { ...d }; delete n[id]; return n; });
+    onChangeHome({ ...home, photos: home.photos.filter((p) => p.id !== id) });
+  };
+
+  const fmtDay = (d) =>
+    toDate(d).toLocaleDateString("default", { weekday: "short", month: "short", day: "numeric" });
+  const fmtPostDate = (iso) =>
+    new Date(iso).toLocaleDateString("default", { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 360px", gap: 20, alignItems: "start" }}>
+      {/* ── Left: weekly posts + photos ── */}
+      <div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, borderBottom: "2px solid #000", paddingBottom: 6, marginBottom: 14 }}>
+          <span style={{ fontSize: 20, fontWeight: 700 }}>Etrain weekly</span>
+          {isAdmin && (
+            <button style={{ ...S.btn, fontSize: 12 }} onClick={() => { setShowPostForm(!showPostForm); setEditingId(null); setDraftPost({ title: "", body: "" }); }}>
+              {showPostForm ? "Cancel" : "+ New post"}
+            </button>
+          )}
+        </div>
+
+        {isAdmin && showPostForm && (
+          <div style={{ border: "1px solid #000", padding: 12, marginBottom: 16 }}>
+            <input style={{ ...S.input, fontWeight: 700, marginBottom: 6 }} placeholder="Post title (e.g. Week of 9/14 — CDR prep)" value={draftPost.title} onChange={(e) => setDraftPost({ ...draftPost, title: e.target.value })} />
+            <textarea style={{ ...S.input, minHeight: 120, lineHeight: 1.5, marginBottom: 6 }} placeholder="Updates, events, deadlines, shoutouts…" value={draftPost.body} onChange={(e) => setDraftPost({ ...draftPost, body: e.target.value })} />
+            <button style={S.btnPrimary} onClick={savePost}>{editingId ? "Save changes" : "Publish"}</button>
+          </div>
+        )}
+
+        {home.posts.length === 0 && !showPostForm && (
+          <div style={{ color: "#666", fontSize: 13, padding: "10px 0 20px" }}>
+            No posts yet.{isAdmin ? " Hit + New post to write the first weekly update." : " Your lead hasn't posted yet."}
+          </div>
+        )}
+        {home.posts.map((p) => (
+          <div key={p.id} style={{ borderBottom: "1px solid #ddd", padding: "12px 0", marginBottom: 4 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ fontSize: 16, fontWeight: 700 }}>{p.title}</span>
+              <span style={{ ...S.mono, fontSize: 11, color: "#666" }}>{fmtPostDate(p.date)}</span>
+              <span style={{ flex: 1 }} />
+              {isAdmin && (
+                <>
+                  <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px" }} onClick={() => { setEditingId(p.id); setDraftPost({ title: p.title, body: p.body }); setShowPostForm(true); window.scrollTo(0, 0); }}>Edit</button>
+                  <button style={{ ...S.btn, fontSize: 11, padding: "2px 8px", color: "#c11414", borderColor: "#c11414" }} onClick={() => window.confirm("Delete this post?") && onChangeHome({ ...home, posts: home.posts.filter((x) => x.id !== p.id) })}>Delete</button>
+                </>
+              )}
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", marginTop: 6 }}>{p.body}</div>
+          </div>
+        ))}
+
+        {/* Photos of the day */}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 12, borderBottom: "2px solid #000", paddingBottom: 6, margin: "28px 0 12px" }}>
+          <span style={{ fontSize: 20, fontWeight: 700 }}>Pictures of the day</span>
+        </div>
+        <div style={{ border: "1px solid #000", padding: 10, marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input ref={fileRef} type="file" accept="image/*" style={{ fontSize: 12 }} onChange={(e) => uploadPhoto(e.target.files?.[0])} disabled={uploading} />
+          <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Caption" value={caption} onChange={(e) => setCaption(e.target.value)} />
+          <input style={{ ...S.input, width: 120 }} placeholder="Your name" value={photoName} onChange={(e) => setPhotoName(e.target.value)} />
+          {uploading && <span style={{ fontSize: 12, color: "#666" }}>Uploading…</span>}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+          {home.photos.map((m) => (
+            <div key={m.id} style={{ border: "1px solid #000" }}>
+              {photoData[m.id] ? (
+                <img src={photoData[m.id]} alt={m.caption || "team photo"} style={{ width: "100%", display: "block" }} />
+              ) : (
+                <div style={{ height: 140, display: "flex", alignItems: "center", justifyContent: "center", color: "#999", fontSize: 12 }}>loading…</div>
+              )}
+              <div style={{ padding: "6px 8px", borderTop: "1px solid #000" }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>{m.caption || "—"}</div>
+                <div style={{ fontSize: 11, color: "#666", display: "flex", gap: 6 }}>
+                  <span>{m.author}</span>
+                  <span style={S.mono}>{fmtPostDate(m.date)}</span>
+                  <span style={{ flex: 1 }} />
+                  <button style={{ border: "none", background: "none", color: "#999", cursor: "pointer", fontSize: 11 }} onClick={() => window.confirm("Delete photo?") && deletePhoto(m.id)}>✕</button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {home.photos.length === 0 && <div style={{ color: "#666", fontSize: 13 }}>No photos yet — first one in the pit wins.</div>}
+        </div>
+      </div>
+
+      {/* ── Right: pit schedule ── */}
+      <div style={{ border: "1px solid #000" }}>
+        <div style={{ padding: "8px 12px", borderBottom: "1px solid #000", fontWeight: 700 }}>Pit schedule</div>
+        <div style={{ padding: 10, borderBottom: "1px solid #000", display: "grid", gap: 6 }}>
+          <input style={S.input} placeholder="Your name" value={slot.name} onChange={(e) => setSlot({ ...slot, name: e.target.value })} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <input type="date" style={{ ...S.input, ...S.mono, fontSize: 12 }} value={slot.date} onChange={(e) => setSlot({ ...slot, date: e.target.value })} />
+            <input type="time" style={{ ...S.input, ...S.mono, fontSize: 12, width: 100 }} value={slot.start} onChange={(e) => setSlot({ ...slot, start: e.target.value })} />
+            <input type="time" style={{ ...S.input, ...S.mono, fontSize: 12, width: 100 }} value={slot.end} onChange={(e) => setSlot({ ...slot, end: e.target.value })} />
+          </div>
+          <input style={S.input} placeholder="What you're working on (optional)" value={slot.note} onChange={(e) => setSlot({ ...slot, note: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addSlot()} />
+          <button style={S.btnPrimary} onClick={addSlot}>I'll be in the pit</button>
+        </div>
+        <div style={{ maxHeight: 480, overflowY: "auto" }}>
+          {Object.keys(byDate).length === 0 && (
+            <div style={{ padding: 12, fontSize: 13, color: "#666" }}>Nobody signed up yet.</div>
+          )}
+          {Object.entries(byDate).map(([date, slots]) => (
+            <div key={date}>
+              <div style={{ padding: "4px 12px", background: "#f0f0f0", borderBottom: "1px solid #ddd", fontSize: 12, fontWeight: 700 }}>
+                {fmtDay(date)}{date === todayStr ? " — today" : ""}
+              </div>
+              {slots.map((s) => (
+                <div key={s.id} style={{ padding: "6px 12px", borderBottom: "1px solid #eee", display: "flex", gap: 8, fontSize: 13, alignItems: "baseline" }}>
+                  <span style={{ ...S.mono, fontSize: 12, whiteSpace: "nowrap" }}>{s.start}{s.end ? `–${s.end}` : ""}</span>
+                  <span style={{ fontWeight: 600 }}>{s.name}</span>
+                  <span style={{ color: "#666", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.note}</span>
+                  <DelBtn onClick={() => onChangeHome({ ...home, pit: home.pit.filter((x) => x.id !== s.id) })} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        {/* Optional embedded Google Calendar */}
+        <div style={{ borderTop: "1px solid #000", padding: 10 }}>
+          {home.gcalUrl ? (
+            <>
+              <iframe src={home.gcalUrl} title="Team Google Calendar" style={{ width: "100%", height: 380, border: "1px solid #ddd" }} />
+              {isAdmin && (
+                <button style={{ ...S.btn, fontSize: 11, marginTop: 6 }} onClick={() => onChangeHome({ ...home, gcalUrl: "" })}>Remove embedded calendar</button>
+              )}
+            </>
+          ) : isAdmin ? (
+            <div>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+                Optional: embed a shared Google Calendar (Calendar settings → Integrate calendar → copy the embed URL; calendar must be public or shared with the team).
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input style={{ ...S.input, fontSize: 11 }} placeholder="https://calendar.google.com/calendar/embed?src=…" onKeyDown={(e) => { if (e.key === "Enter" && e.target.value.startsWith("https://calendar.google.com")) onChangeHome({ ...home, gcalUrl: e.target.value.trim() }); }} />
+              </div>
+              <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>Paste and hit Enter.</div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin home ─────────────────────────────────────────────────────────────
+
+function AdminHome({ store, setStore, openProject }) {
+  const [name, setName] = useState("");
+  const [member, setMember] = useState("");
+  const [copied, setCopied] = useState(null);
+
+  const create = () => {
+    if (!name.trim()) return;
+    setStore({ ...store, projects: [...store.projects, emptyProject(name.trim(), member.trim())] });
+    setName("");
+    setMember("");
+  };
+
+  const copyCode = (p) => {
+    const text = `${p.name} — access code: ${p.code}\nOpen the tracker link and enter this code to see your project.`;
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(p.id);
+      setTimeout(() => setCopied(null), 1500);
+    });
+  };
+
+  return (
+    <div>
+      <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 20 }}>
+        <thead>
+          <tr>
+            <th style={S.th}>Project</th>
+            <th style={S.th}>Member</th>
+            <th style={{ ...S.th, width: 110 }}>Access code</th>
+            <th style={{ ...S.th, width: 90 }}>Tasks open</th>
+            <th style={{ ...S.th, width: 80 }}>Overdue</th>
+            <th style={{ ...S.th, width: 90 }}>Orders req.</th>
+            <th style={{ ...S.th, width: 200 }}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {store.projects.map((p) => {
+            const open = p.tasks.filter((t) => t.status !== "Complete").length;
+            const od = [...p.tasks, ...p.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
+            const req = p.orders.filter((o) => o.status === "Requested").length;
+            return (
+              <tr key={p.id}>
+                <td style={{ ...S.td, fontWeight: 600, cursor: "pointer" }} onClick={() => openProject(p.id)}>
+                  {p.name}
+                </td>
+                <td style={S.td}>{p.member || "—"}</td>
+                <td style={{ ...S.td, ...S.mono }}>{p.code}</td>
+                <td style={{ ...S.td, ...S.mono }}>{open}</td>
+                <td style={{ ...S.td, ...S.mono, color: od ? "#c11414" : undefined, fontWeight: od ? 700 : 400 }}>{od}</td>
+                <td style={{ ...S.td, ...S.mono, color: req ? ACCENT : undefined, fontWeight: req ? 700 : 400 }}>{req}</td>
+                <td style={S.td}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button style={S.btn} onClick={() => openProject(p.id)}>Open</button>
+                    <button style={S.btn} onClick={() => copyCode(p)}>{copied === p.id ? "Copied" : "Copy invite"}</button>
+                    <button
+                      style={{ ...S.btn, color: "#c11414", borderColor: "#c11414" }}
+                      onClick={() => {
+                        if (window.confirm(`Delete project "${p.name}" and all its data?`))
+                          setStore({ ...store, projects: store.projects.filter((x) => x.id !== p.id) });
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+          {store.projects.length === 0 && (
+            <tr>
+              <td style={{ ...S.td, color: "#666" }} colSpan={7}>
+                No projects yet. Create the first one below — e.g. "LV Battery", "Accumulator", "Inverters".
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <div style={{ border: "1px solid #000", padding: 14, maxWidth: 560 }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>New project</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input style={{ ...S.input, flex: 2, minWidth: 160 }} placeholder="Project name (e.g. LV Battery)" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} />
+          <input style={{ ...S.input, flex: 1, minWidth: 120 }} placeholder="Member name" value={member} onChange={(e) => setMember(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} />
+          <button style={S.btnPrimary} onClick={create}>Create</button>
+        </div>
+        <div style={{ fontSize: 12, color: "#666", marginTop: 8 }}>
+          Each project gets an access code. Send the member this app's link plus their code — entering the code shows them only their project.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Gate (login) ───────────────────────────────────────────────────────────
+
+function Gate({ store, setStore, onEnter }) {
+  const [code, setCode] = useState("");
+  const [err, setErr] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const needsSetup = !store.adminPin;
+
+  const submit = () => {
+    const c = code.trim().toUpperCase();
+    if (!c) return;
+    if (store.adminPin && c === store.adminPin.toUpperCase()) return onEnter({ role: "admin" });
+    const p = store.projects.find((x) => x.code === c);
+    if (p) return onEnter({ role: "member", projectId: p.id });
+    setErr("Code not recognized.");
+  };
+
+  const setup = () => {
+    const pin = newPin.trim().toUpperCase();
+    if (pin.length < 4) return setErr("Lead PIN must be at least 4 characters.");
+    setStore({ ...store, adminPin: pin });
+    onEnter({ role: "admin" });
+  };
+
+  return (
+    <div style={{ maxWidth: 420, margin: "60px auto", border: "1px solid #000", padding: 24 }}>
+      <div style={{ fontSize: 12, color: "#666" }}>UWFM · T38 Etrain</div>
+      <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 16 }}>Project Tracker</div>
+      {needsSetup ? (
+        <>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>
+            First run — set a lead PIN. You'll use it to open the full team view; members get per-project codes.
+          </div>
+          <input style={{ ...S.input, ...S.mono, marginBottom: 8 }} placeholder="Choose lead PIN (min 4 chars)" value={newPin} onChange={(e) => setNewPin(e.target.value)} onKeyDown={(e) => e.key === "Enter" && setup()} />
+          <button style={{ ...S.btnPrimary, width: "100%" }} onClick={setup}>Set PIN & enter</button>
+        </>
+      ) : (
+        <>
+          <input
+            style={{ ...S.input, ...S.mono, marginBottom: 8 }}
+            placeholder="Lead PIN or member access code"
+            value={code}
+            onChange={(e) => { setCode(e.target.value); setErr(""); }}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            autoFocus
+          />
+          <button style={{ ...S.btnPrimary, width: "100%" }} onClick={submit}>Enter</button>
+        </>
+      )}
+      {err && <div style={{ color: "#c11414", fontSize: 12, marginTop: 8 }}>{err}</div>}
+      <div style={{ fontSize: 11, color: "#666", marginTop: 14, borderTop: "1px solid #ddd", paddingTop: 10 }}>
+        Data is shared: everyone with this link sees the same tracker, scoped by their code.
+      </div>
+    </div>
+  );
+}
+
+// ─── App root ───────────────────────────────────────────────────────────────
+
+export default function App() {
+  const [store, setStoreState] = useState(null);
+  const [session, setSession] = useState(null); // {role, projectId?}
+  const [openId, setOpenId] = useState(null);
+  const [page, setPage] = useState("home"); // home | projects
+  const [saveErr, setSaveErr] = useState(false);
+
+  useEffect(() => {
+    loadStore().then(setStoreState);
+  }, []);
+
+  const setStore = useCallback((next) => {
+    setStoreState(next);
+    saveStore(next).then((ok) => setSaveErr(!ok));
+  }, []);
+
+  const refresh = () => loadStore().then(setStoreState);
+
+  if (!store)
+    return (
+      <div style={{ fontFamily: "system-ui, sans-serif", padding: 40, fontSize: 14 }}>Loading tracker…</div>
+    );
+
+  const home = store.home || emptyHome;
+  const setHome = (h) => setStore({ ...store, home: h });
+
+  const updateProject = (proj) =>
+    setStore({ ...store, projects: store.projects.map((p) => (p.id === proj.id ? proj : p)) });
+
+  const memberProject =
+    session?.role === "member" ? store.projects.find((x) => x.id === session.projectId) : null;
+
+  let body;
+  if (!session) {
+    body = <Gate store={store} setStore={setStore} onEnter={(s) => { setSession(s); setPage("home"); }} />;
+  } else if (page === "home") {
+    body = (
+      <EtrainHome
+        home={home}
+        onChangeHome={setHome}
+        isAdmin={session.role === "admin"}
+        defaultName={memberProject?.member || ""}
+      />
+    );
+  } else if (session.role === "member") {
+    body = memberProject ? (
+      <ProjectView project={memberProject} onChange={updateProject} isAdmin={false} />
+    ) : (
+      <div style={{ padding: 40 }}>This project was removed. Ask your lead for a new code.</div>
+    );
+  } else if (openId) {
+    const p = store.projects.find((x) => x.id === openId);
+    body = p ? (
+      <ProjectView project={p} onChange={updateProject} onBack={() => setOpenId(null)} isAdmin />
+    ) : null;
+  } else {
+    body = <AdminHome store={store} setStore={setStore} openProject={setOpenId} />;
+  }
+
+  const navTabs = session
+    ? [["home", "Etrain home"], ["projects", session.role === "admin" ? "Projects" : "My project"]]
+    : [];
+
+  return (
+    <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", color: "#000", background: "#fff", minHeight: "100vh" }}>
+      {session && (
+        <div style={{ borderBottom: "1px solid #000", padding: "0 20px", display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ fontWeight: 700, padding: "8px 0", marginRight: 12 }}>UWFM · T38 Etrain</span>
+          {navTabs.map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => { setPage(id); if (id === "projects") setOpenId(null); }}
+              style={{
+                ...S.btn,
+                border: "none",
+                borderBottom: page === id ? `3px solid ${ACCENT}` : "3px solid transparent",
+                fontWeight: page === id ? 700 : 400,
+                padding: "10px 14px",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 12, color: "#666", marginRight: 10 }}>{session.role === "admin" ? "Lead view" : "Member view"}</span>
+          {saveErr && <span style={{ color: "#c11414", fontSize: 12, marginRight: 10 }}>Save failed — retry your last edit</span>}
+          <button style={{ ...S.btn, fontSize: 12, marginRight: 6 }} onClick={refresh}>Refresh</button>
+          <button style={{ ...S.btn, fontSize: 12 }} onClick={() => { setSession(null); setOpenId(null); setPage("home"); }}>Sign out</button>
+        </div>
+      )}
+      <div style={{ padding: session ? 20 : 0, maxWidth: 1280, margin: "0 auto" }}>{body}</div>
+    </div>
+  );
+}
