@@ -1021,6 +1021,7 @@ function EtrainHome({ home, onChangeHome, isAdmin, defaultName }) {
   const [photoData, setPhotoData] = useState({});
   const [caption, setCaption] = useState("");
   const [photoName, setPhotoName] = useState(defaultName || "");
+  const [pendingFile, setPendingFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = React.useRef(null);
 
@@ -1052,6 +1053,7 @@ function EtrainHome({ home, onChangeHome, isAdmin, defaultName }) {
       });
       setCaption("");
       setPhotoName("");
+      setPendingFile(null);
       if (fileRef.current) fileRef.current.value = "";
     } catch {
       alert("Couldn't process that image.");
@@ -1118,9 +1120,10 @@ function EtrainHome({ home, onChangeHome, isAdmin, defaultName }) {
           <span style={{ fontSize: 20, fontWeight: 700 }}>Pictures of the day</span>
         </div>
         <div style={{ border: "1px solid #000", padding: 10, marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <input ref={fileRef} type="file" accept="image/*" style={{ fontSize: 12 }} onChange={(e) => uploadPhoto(e.target.files?.[0])} disabled={uploading} />
+          <input ref={fileRef} type="file" accept="image/*" style={{ fontSize: 12 }} onChange={(e) => setPendingFile(e.target.files?.[0] || null)} disabled={uploading} />
           <input style={{ ...S.input, flex: 1, minWidth: 140 }} placeholder="Caption" value={caption} onChange={(e) => setCaption(e.target.value)} />
           <input style={{ ...S.input, width: 120 }} placeholder="Your name" value={photoName} onChange={(e) => setPhotoName(e.target.value)} />
+          <button style={S.btnPrimary} onClick={() => uploadPhoto(pendingFile)} disabled={!pendingFile || uploading}>Post</button>
           {uploading && <span style={{ fontSize: 12, color: "#666" }}>Uploading…</span>}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
