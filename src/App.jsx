@@ -977,8 +977,8 @@ function InfoTab({ info, onUpdate, isAdmin }) {
   };
 
   return (
-    <div style={{ maxWidth: 980 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px", gap: 20, alignItems: "start" }}>
+    <div style={{ maxWidth: 1400 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 340px minmax(240px, 1fr)", gap: 20, alignItems: "start" }}>
         {/* Description */}
         <div>
           <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
@@ -991,35 +991,6 @@ function InfoTab({ info, onUpdate, isAdmin }) {
             onChange={(e) => setDesc(e.target.value)}
             onBlur={() => onUpdate({ ...info, description: desc })}
           />
-
-          <div style={{ marginTop: 20 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Vision board</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
-              {visionBoard.map((slotId, i) => (
-                <ImageSlot
-                  key={slotId}
-                  compact
-                  imageId={slotId}
-                  prefix="uwfm-vision:"
-                  onChange={(id) => {
-                    const next = [...visionBoard];
-                    if (id) next[i] = id;
-                    else next.splice(i, 1);
-                    onUpdate({ ...info, visionBoard: next });
-                  }}
-                />
-              ))}
-              <ImageSlot
-                key={`add-${visionBoard.length}`}
-                compact
-                imageId={null}
-                prefix="uwfm-vision:"
-                onChange={(id) => {
-                  if (id) onUpdate({ ...info, visionBoard: [...visionBoard, id] });
-                }}
-              />
-            </div>
-          </div>
         </div>
 
         {/* Picture */}
@@ -1041,7 +1012,38 @@ function InfoTab({ info, onUpdate, isAdmin }) {
               onChange={(id) => onUpdate({ ...info, lastYearImageId: id })}
             />
           </div>
+        </div>
 
+        {/* Vision board */}
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
+            Vision board
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
+            {visionBoard.map((slotId, i) => (
+              <ImageSlot
+                key={slotId}
+                compact
+                imageId={slotId}
+                prefix="uwfm-vision:"
+                onChange={(id) => {
+                  const next = [...visionBoard];
+                  if (id) next[i] = id;
+                  else next.splice(i, 1);
+                  onUpdate({ ...info, visionBoard: next });
+                }}
+              />
+            ))}
+            <ImageSlot
+              key={`add-${visionBoard.length}`}
+              compact
+              imageId={null}
+              prefix="uwfm-vision:"
+              onChange={(id) => {
+                if (id) onUpdate({ ...info, visionBoard: [...visionBoard, id] });
+              }}
+            />
+          </div>
         </div>
       </div>
 
