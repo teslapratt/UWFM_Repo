@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import T38Packaging from "./PackagingTool";
 
 // ─── UWFM Etrain Project Tracker ────────────────────────────────────────────
 // Drawing-sheet aesthetic: white ground, black hairlines, square corners.
@@ -1752,6 +1753,8 @@ export default function App() {
         defaultName={memberProject?.member || ""}
       />
     );
+  } else if (page === "packaging") {
+    body = <T38Packaging />;
   } else if (session.role === "member") {
     body = memberProject ? (
       <ProjectView project={memberProject} onChange={updateProject} isAdmin={false} />
@@ -1768,7 +1771,7 @@ export default function App() {
   }
 
   const navTabs = session
-    ? [["home", "Etrain home"], ["projects", session.role === "admin" ? "Projects" : "My project"]]
+    ? [["home", "Etrain home"], ["projects", session.role === "admin" ? "Projects" : "My project"], ["packaging", "Packaging"]]
     : [];
 
   return (
@@ -1798,7 +1801,11 @@ export default function App() {
           <button style={{ ...S.btn, fontSize: 12 }} onClick={() => { setSession(null); setOpenId(null); setPage("home"); }}>Sign out</button>
         </div>
       )}
-      <div style={{ padding: session ? 20 : 0, maxWidth: 1280, margin: "0 auto" }}>{body}</div>
+      {page === "packaging" && session ? (
+        <div style={{ height: "calc(100vh - 45px)" }}>{body}</div>
+      ) : (
+        <div style={{ padding: session ? 20 : 0, maxWidth: 1280, margin: "0 auto" }}>{body}</div>
+      )}
     </div>
   );
 }
