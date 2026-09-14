@@ -991,31 +991,10 @@ function InfoTab({ info, onUpdate, isAdmin }) {
             onChange={(e) => setDesc(e.target.value)}
             onBlur={() => onUpdate({ ...info, description: desc })}
           />
-        </div>
-
-        {/* Picture */}
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
-            Picture
-          </div>
-          <ImageSlot
-            imageId={info.imageId}
-            prefix="uwfm-projimg:"
-            onChange={(id) => onUpdate({ ...info, imageId: id })}
-          />
-
-          <div style={{ marginTop: 20 }}>
-            <ImageSlot
-              label="Last year's photo"
-              imageId={info.lastYearImageId}
-              prefix="uwfm-lastyear:"
-              onChange={(id) => onUpdate({ ...info, lastYearImageId: id })}
-            />
-          </div>
 
           <div style={{ marginTop: 20 }}>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Vision board</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 8 }}>
               {visionBoard.map((slotId, i) => (
                 <ImageSlot
                   key={slotId}
@@ -1041,6 +1020,28 @@ function InfoTab({ info, onUpdate, isAdmin }) {
               />
             </div>
           </div>
+        </div>
+
+        {/* Picture */}
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, borderBottom: "1px solid #000", paddingBottom: 4, marginBottom: 8 }}>
+            Picture
+          </div>
+          <ImageSlot
+            imageId={info.imageId}
+            prefix="uwfm-projimg:"
+            onChange={(id) => onUpdate({ ...info, imageId: id })}
+          />
+
+          <div style={{ marginTop: 20 }}>
+            <ImageSlot
+              label="Last year's photo"
+              imageId={info.lastYearImageId}
+              prefix="uwfm-lastyear:"
+              onChange={(id) => onUpdate({ ...info, lastYearImageId: id })}
+            />
+          </div>
+
         </div>
       </div>
 
