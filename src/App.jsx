@@ -899,7 +899,7 @@ function ImageSlot({ label, imageId, prefix, onChange, compact }) {
       {label && <div style={{ fontWeight: 700, fontSize: compact ? 12 : 14, marginBottom: 6 }}>{label}</div>}
       {imgData ? compact ? (
         <div style={{ position: "relative", border: "1px solid #000" }}>
-          <img src={imgData} alt={label || "photo"} style={{ width: "100%", height: 90, objectFit: "cover", display: "block" }} />
+          <img src={imgData} alt={label || "photo"} style={{ width: "100%", height: 130, objectFit: "cover", display: "block" }} />
           <button
             onClick={() => setMenuOpen((v) => !v)}
             title="Edit photo"
@@ -941,7 +941,7 @@ function ImageSlot({ label, imageId, prefix, onChange, compact }) {
             fontSize: compact ? 10 : 12,
             color: "#666",
             cursor: "pointer",
-            height: compact ? 90 : undefined,
+            height: compact ? 130 : undefined,
             display: compact ? "flex" : undefined,
             alignItems: compact ? "center" : undefined,
             justifyContent: compact ? "center" : undefined,
