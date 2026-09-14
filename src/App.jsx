@@ -851,6 +851,7 @@ function LinkRow({ label, url, placeholder, onChange }) {
 function ImageSlot({ label, imageId, prefix, onChange, compact }) {
   const [imgData, setImgData] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const ref = React.useRef(null);
 
   useEffect(() => {
@@ -896,16 +897,39 @@ function ImageSlot({ label, imageId, prefix, onChange, compact }) {
   return (
     <div>
       {label && <div style={{ fontWeight: 700, fontSize: compact ? 12 : 14, marginBottom: 6 }}>{label}</div>}
-      {imgData ? (
+      {imgData ? compact ? (
+        <div style={{ position: "relative", border: "1px solid #000" }}>
+          <img src={imgData} alt={label || "photo"} style={{ width: "100%", height: 90, objectFit: "cover", display: "block" }} />
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="Edit photo"
+            style={{ position: "absolute", top: 4, right: 4, width: 20, height: 20, border: "1px solid #000", background: "#fff", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: "18px" }}
+          >
+            ✎
+          </button>
+          {menuOpen && (
+            <div style={{ position: "absolute", top: 26, right: 4, background: "#fff", border: "1px solid #000", zIndex: 5 }}>
+              <button
+                style={{ display: "block", width: "100%", border: "none", borderBottom: "1px solid #000", background: "none", fontSize: 11, padding: "4px 10px", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap" }}
+                onClick={() => { setMenuOpen(false); ref.current?.click(); }}
+              >
+                Replace
+              </button>
+              <button
+                style={{ display: "block", width: "100%", border: "none", background: "none", fontSize: 11, padding: "4px 10px", cursor: "pointer", textAlign: "left", color: "#c11414", whiteSpace: "nowrap" }}
+                onClick={() => { setMenuOpen(false); remove(); }}
+              >
+                Remove
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
         <div style={{ border: "1px solid #000" }}>
-          <img
-            src={imgData}
-            alt={label || "photo"}
-            style={{ width: "100%", height: compact ? 90 : undefined, objectFit: compact ? "cover" : undefined, display: "block" }}
-          />
+          <img src={imgData} alt={label || "photo"} style={{ width: "100%", display: "block" }} />
           <div style={{ display: "flex", borderTop: "1px solid #000" }}>
-            <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000", flex: 1, fontSize: compact ? 10 : 12, padding: compact ? "2px 4px" : undefined }} onClick={() => ref.current?.click()}>Replace</button>
-            <button style={{ ...S.btn, border: "none", flex: 1, fontSize: compact ? 10 : 12, padding: compact ? "2px 4px" : undefined, color: "#c11414" }} onClick={remove}>Remove</button>
+            <button style={{ ...S.btn, border: "none", borderRight: "1px solid #000", flex: 1, fontSize: 12 }} onClick={() => ref.current?.click()}>Replace</button>
+            <button style={{ ...S.btn, border: "none", flex: 1, fontSize: 12, color: "#c11414" }} onClick={remove}>Remove</button>
           </div>
         </div>
       ) : (
@@ -938,7 +962,7 @@ function InfoTab({ info, onUpdate, isAdmin }) {
   const [pastDraft, setPastDraft] = useState({ label: "", url: "" });
   const links = info.links || [];
   const past = info.pastResources || [];
-  const visionBoard = info.visionBoard || [null, null, null];
+  const visionBoard = (info.visionBoard || []).filter(Boolean);
 
   const addExtra = () => {
     if (!extraDraft.url.trim()) return;
@@ -994,17 +1018,27 @@ function InfoTab({ info, onUpdate, isAdmin }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
               {visionBoard.map((slotId, i) => (
                 <ImageSlot
-                  key={i}
+                  key={slotId}
                   compact
                   imageId={slotId}
                   prefix="uwfm-vision:"
                   onChange={(id) => {
                     const next = [...visionBoard];
-                    next[i] = id;
+                    if (id) next[i] = id;
+                    else next.splice(i, 1);
                     onUpdate({ ...info, visionBoard: next });
                   }}
                 />
               ))}
+              <ImageSlot
+                key={`add-${visionBoard.length}`}
+                compact
+                imageId={null}
+                prefix="uwfm-vision:"
+                onChange={(id) => {
+                  if (id) onUpdate({ ...info, visionBoard: [...visionBoard, id] });
+                }}
+              />
             </div>
           </div>
         </div>
