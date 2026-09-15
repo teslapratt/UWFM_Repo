@@ -72,6 +72,25 @@ function Num({ value, onChange, step = 1, w = 66 }) {
   );
 }
 
+// Module-level (not defined inside T38Packaging's render) so React keeps the
+// same component identity across re-renders instead of remounting the input
+// and kicking focus out on every keystroke.
+function F({ sel, upd, label, k, step = 1, w }) {
+  return (
+    <label className="fld"><span>{label}</span><Num value={sel[k]} step={step} w={w} onChange={(v) => upd(sel.id, { [k]: v })} /></label>
+  );
+}
+function RotRow({ sel, upd, rotate, rotStep, axis, name }) {
+  return (
+    <div className="rotrow">
+      <span className="rlbl">{name}</span>
+      <button className="rb" onClick={() => rotate(sel.id, axis, -rotStep)}>⟲</button>
+      <Num value={sel[axis]} step={rotStep} w={58} onChange={(v) => upd(sel.id, { [axis]: v })} />
+      <button className="rb" onClick={() => rotate(sel.id, axis, rotStep)}>⟳</button>
+    </div>
+  );
+}
+
 function View({ vk, comps, selId, onSelect, onDrag, onRotate, rotStep, fw, setFw }) {
   const V = VIEWS[vk];
   const wrapRef = useRef(null);
@@ -223,18 +242,6 @@ export default function T38Packaging() {
   const rotate = (id, axis, d) => setComps((cs) => cs.map((c) => (c.id === id ? { ...c, [axis]: ((c[axis] + d) % 360 + 360) % 360 } : c)));
   const sel = comps.find((c) => c.id === selId);
 
-  const F = ({ label, k, step = 1, w }) => (
-    <label className="fld"><span>{label}</span><Num value={sel[k]} step={step} w={w} onChange={(v) => upd(sel.id, { [k]: v })} /></label>
-  );
-  const RotRow = ({ axis, name }) => (
-    <div className="rotrow">
-      <span className="rlbl">{name}</span>
-      <button className="rb" onClick={() => rotate(sel.id, axis, -rotStep)}>⟲</button>
-      <Num value={sel[axis]} step={rotStep} w={58} onChange={(v) => upd(sel.id, { [axis]: v })} />
-      <button className="rb" onClick={() => rotate(sel.id, axis, rotStep)}>⟳</button>
-    </div>
-  );
-
   return (
     <div className="app">
       <style>{CSS}</style>
@@ -258,23 +265,23 @@ export default function T38Packaging() {
           <div className="editor">
             <div className="sect">Exact dimensions <em>mm, before rotation</em></div>
             <div className="grid3">
-              <F label="L (x)" k="L" /><F label="W (y)" k="W" /><F label="H (z)" k="H" />
+              <F sel={sel} upd={upd} label="L (x)" k="L" /><F sel={sel} upd={upd} label="W (y)" k="W" /><F sel={sel} upd={upd} label="H (z)" k="H" />
             </div>
             <div className="sect">Cushion <em>clearance per side</em></div>
             <div className="grid3">
-              <F label="±L" k="cL" /><F label="±W" k="cW" /><F label="±H" k="cH" />
+              <F sel={sel} upd={upd} label="±L" k="cL" /><F sel={sel} upd={upd} label="±W" k="cW" /><F sel={sel} upd={upd} label="±H" k="cH" />
             </div>
             <div className="envelope">envelope {sel.L + 2 * sel.cL} × {sel.W + 2 * sel.cW} × {sel.H + 2 * sel.cH}</div>
             <div className="sect">Position <em>box center, part coords</em></div>
             <div className="grid3">
-              <F label="x" k="x" step={5} /><F label="y" k="y" step={5} /><F label="z" k="z" step={5} />
+              <F sel={sel} upd={upd} label="x" k="x" step={5} /><F sel={sel} upd={upd} label="y" k="y" step={5} /><F sel={sel} upd={upd} label="z" k="z" step={5} />
             </div>
             <div className="sect">Rotation <em>deg · step
               <select value={rotStep} onChange={(e) => setRotStep(+e.target.value)}>{[5, 15, 45, 90].map((s) => <option key={s} value={s}>{s}°</option>)}</select></em>
             </div>
-            <RotRow axis="rx" name="rx (roll)" />
-            <RotRow axis="ry" name="ry (pitch)" />
-            <RotRow axis="rz" name="rz (yaw)" />
+            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rx" name="rx (roll)" />
+            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="ry" name="ry (pitch)" />
+            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rz" name="rz (yaw)" />
             <div className="sect">Color</div>
             <div className="swatches">{PALETTE.map((p) => <b key={p} style={{ background: p, outline: sel.color === p ? "2px solid #111" : "none" }} onClick={() => upd(sel.id, { color: p })} />)}</div>
           </div>
