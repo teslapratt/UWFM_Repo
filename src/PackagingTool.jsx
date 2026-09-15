@@ -301,6 +301,52 @@ export default function T38Packaging() {
     })();
   }, []);
 
+  // Undo/redo: coalesce bursts of change (a drag, a run of keystrokes) into a
+  // single history entry instead of recording every intermediate frame.
+  const historyRef = useRef([]);
+  const redoRef = useRef([]);
+  const pendingRef = useRef(null);
+  const historyTimer = useRef(null);
+  useEffect(() => {
+    if (!comps) return;
+    if (pendingRef.current === null) { pendingRef.current = { comps, fw }; return; }
+    clearTimeout(historyTimer.current);
+    historyTimer.current = setTimeout(() => {
+      historyRef.current.push(pendingRef.current);
+      if (historyRef.current.length > 100) historyRef.current.shift();
+      redoRef.current = [];
+      pendingRef.current = { comps, fw };
+    }, 400);
+  }, [comps, fw]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.key.toLowerCase() !== "z") return;
+      if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
+      e.preventDefault();
+      if (!comps) return;
+      clearTimeout(historyTimer.current);
+      if (e.shiftKey) {
+        const next = redoRef.current.pop();
+        if (!next) return;
+        historyRef.current.push({ comps, fw });
+        pendingRef.current = next;
+        setComps(next.comps);
+        setFw(next.fw);
+      } else {
+        const prev = historyRef.current.pop();
+        if (!prev) return;
+        redoRef.current.push({ comps, fw });
+        pendingRef.current = prev;
+        setComps(prev.comps);
+        setFw(prev.fw);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [comps, fw]);
+
   const persistMockups = async (list) => {
     setMockups(list);
     try { await window.storage.set(MOCKUPS_KEY, JSON.stringify(list)); } catch (_) {}
@@ -391,7 +437,7 @@ export default function T38Packaging() {
             </label>
           </div>
         </div>
-        <div className="foot">{saved || "autosaves to shared layout storage"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
+        <div className="foot">{(saved || "autosaves to shared layout storage") + " · Ctrl/Cmd+Z to undo"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
       </aside>
       <main className="views">
         <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
