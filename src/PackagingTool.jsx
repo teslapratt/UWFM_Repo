@@ -134,6 +134,10 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
       const dx = e.clientX - d.lastX;
       if (dx) onRotate(d.id, d.axis, dx * -0.5);
       d.lastX = e.clientX;
+    } else if (d.kind === "fwtilt") {
+      const dx = e.clientX - d.lastX;
+      if (dx) setFw((f) => ({ ...f, tilt: Math.round((f.tilt + dx * -0.5) * 10) / 10 }));
+      d.lastX = e.clientX;
     } else {
       setVb([d.vb0[0] - (e.clientX - d.u0) / scale, d.vb0[1] - (e.clientY - d.v0) / scale, d.vb0[2], d.vb0[3]]);
     }
@@ -196,11 +200,31 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
           if (vk === "side") {
             const zb = 30, zt = 555;
             const du = Math.tan(fw.tilt * D2R) * (zt - zb); // + tilt leans top rearward (+x)
+            const liveCx = -(fw.x + du), liveTop = -zt;
+            const activeTilt = dragRef.current?.kind === "fwtilt" ? dragRef.current : null;
+            const cx = activeTilt ? activeTilt.cx : liveCx;
+            const top = activeTilt ? activeTilt.top : liveTop;
+            const r = 13 / scale, gap = 26 / scale, yy = top - 22 / scale;
+            const startTiltDrag = (e) => {
+              e.stopPropagation();
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+              dragRef.current = { kind: "fwtilt", lastX: e.clientX, top: liveTop, cx: liveCx };
+            };
+            const tbtn = (dx, glyph) => (
+              <g key={glyph} transform={`translate(${cx + dx},${yy})`} className="rotbtn" onPointerDown={startTiltDrag}>
+                <circle r={r} />
+                <text fontSize={15 / scale} dy={5 / scale}>{glyph}</text>
+              </g>
+            );
             return (
-              <g className="fwline" onPointerDown={(e) => down(e, "fw")}>
-                <line x1={-fw.x} y1={-zb} x2={-(fw.x + du)} y2={-zt} />
-                <line className="fwhit" x1={-fw.x} y1={-zb} x2={-(fw.x + du)} y2={-zt} />
-                <text x={-(fw.x + du)} y={-zt - 8 / scale} fontSize={11 / scale}>{lbl}</text>
+              <g className="fwline">
+                <g onPointerDown={(e) => down(e, "fw")}>
+                  <line x1={-fw.x} y1={-zb} x2={-(fw.x + du)} y2={-zt} />
+                  <line className="fwhit" x1={-fw.x} y1={-zb} x2={-(fw.x + du)} y2={-zt} />
+                  <text x={-(fw.x + du)} y={-zt - 8 / scale} fontSize={11 / scale}>{lbl}</text>
+                </g>
+                {tbtn(-gap, "⟲")}
+                {tbtn(gap, "⟳")}
               </g>
             );
           }
