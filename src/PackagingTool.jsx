@@ -55,7 +55,7 @@ const mkComp = (n, over = {}) => ({
   id: "c" + uid++ + "_" + Date.now().toString(36),
   name: n, color: PALETTE[(uid - 2) % PALETTE.length],
   L: 300, W: 200, H: 150, cL: 10, cW: 10, cH: 10,
-  x: 200, y: 0, z: 250, rx: 0, ry: 0, rz: 0, ...over,
+  x: 200, y: 0, z: 250, rx: 0, ry: 0, rz: 0, groupId: null, ...over,
 });
 
 const STORE_KEY = "t38-packaging-v1";
@@ -130,10 +130,11 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
     e.stopPropagation();
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const [u0, v0] = toMM(e);
+    const group = comp && comp !== "fw" && comp.groupId ? comps.filter((c) => c.groupId === comp.groupId) : comp && comp !== "fw" ? [comp] : [];
     dragRef.current = comp === "fw"
       ? { kind: "fw", u0, x0: fw.x }
       : comp
-      ? { kind: "comp", id: comp.id, u0, v0, pos: { x: comp.x, y: comp.y, z: comp.z } }
+      ? { kind: "comp", u0, v0, group: group.map((c) => ({ id: c.id, pos: { x: c.x, y: c.y, z: c.z } })) }
       : { kind: "pan", u0: e.clientX, v0: e.clientY, vb0: [...vb] };
     if (comp && comp !== "fw") onSelect(comp.id);
   };
@@ -144,8 +145,11 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
       setFw((f) => ({ ...f, x: Math.round((d.x0 - (u - d.u0)) * 10) / 10 }));
     } else if (d.kind === "comp") {
       const [u, v] = toMM(e);
-      const np = V.applyDrag(d.pos, u - d.u0, v - d.v0);
-      onDrag(d.id, { x: Math.round(np.x * 10) / 10, y: Math.round(np.y * 10) / 10, z: Math.round(np.z * 10) / 10 });
+      const du = u - d.u0, dv = v - d.v0;
+      d.group.forEach((g) => {
+        const np = V.applyDrag(g.pos, du, dv);
+        onDrag(g.id, { x: Math.round(np.x * 10) / 10, y: Math.round(np.y * 10) / 10, z: Math.round(np.z * 10) / 10 });
+      });
     } else if (d.kind === "rot") {
       const dx = e.clientX - d.lastX;
       if (dx) onRotate(d.id, d.axis, dx * -0.5);
@@ -262,6 +266,7 @@ export default function T38Packaging() {
   const [comps, setComps] = useState(null);
   const [fw, setFw] = useState({ x: -131, tilt: 0, show: true });
   const [selId, setSelId] = useState(null);
+  const [multiSel, setMultiSel] = useState(() => new Set());
   const [rotStep, setRotStep] = useState(15);
   const [saved, setSaved] = useState("");
   const [mockups, setMockups] = useState([]);
@@ -387,6 +392,25 @@ export default function T38Packaging() {
   const rotate = (id, axis, d) => setComps((cs) => cs.map((c) => (c.id === id ? { ...c, [axis]: ((c[axis] + d) % 360 + 360) % 360 } : c)));
   const sel = comps.find((c) => c.id === selId);
 
+  const toggleMultiSel = (id) =>
+    setMultiSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const groupSelected = () => {
+    if (multiSel.size < 2) return;
+    const gid = "g" + Date.now().toString(36);
+    setComps((cs) => cs.map((c) => (multiSel.has(c.id) ? { ...c, groupId: gid } : c)));
+    setMultiSel(new Set());
+  };
+  const ungroupSelected = () => {
+    if (!sel?.groupId) return;
+    const gid = sel.groupId;
+    setComps((cs) => cs.map((c) => (c.groupId === gid ? { ...c, groupId: null } : c)));
+  };
+
   return (
     <div className="app">
       <style>{CSS}</style>
@@ -394,14 +418,21 @@ export default function T38Packaging() {
         <div className="brand">T38 packaging<span>monocoque 2279.87 × 690.04 × 525.00 mm · exact STEP geometry · nose x=−1693.8 · cockpit −979…−322 · rear bulkhead x=+586.1 (face z 119.4–509.7, h 390.3) · y ±345.0 · z 30…555</span></div>
         <div className="row">
           <button className="btn primary" onClick={() => { const c = mkComp("Component " + comps.length); setComps((cs) => [...cs, c]); setSelId(c.id); }}>Add component</button>
-          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++, name: sel.name + " copy", x: sel.x + 50 }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Duplicate</button>
-          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++ , name: sel.name + " copy", y: -sel.y }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Mirror ↔</button>
+          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++, name: sel.name + " copy", x: sel.x + 50, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Duplicate</button>
+          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++ , name: sel.name + " copy", y: -sel.y, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Mirror ↔</button>
           <button className="btn danger" disabled={!sel} onClick={() => { setComps((cs) => cs.filter((c) => c.id !== sel.id)); setSelId(null); }}>Delete</button>
         </div>
+        <div className="row">
+          <button className="btn" disabled={multiSel.size < 2} onClick={groupSelected}>Group{multiSel.size >= 2 ? ` (${multiSel.size})` : ""}</button>
+          <button className="btn" disabled={!sel?.groupId} onClick={ungroupSelected}>Ungroup</button>
+        </div>
+        <div className="hint" style={{ padding: "0 12px 8px" }}>Check components below, then hit Group. Dragging any member of a group moves the whole group.</div>
         <div className="complist">
           {comps.map((c) => (
             <div key={c.id} className={"citem" + (c.id === selId ? " on" : "")} onClick={() => setSelId(c.id)}>
+              <input type="checkbox" checked={multiSel.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleMultiSel(c.id)} />
               <i style={{ background: c.color }} />
+              {c.groupId && <span title="Grouped" className="groupdot">⛓</span>}
               <input value={c.name} onChange={(e) => upd(c.id, { name: e.target.value })} onClick={(e) => e.stopPropagation()} />
               <em>{c.L}×{c.W}×{c.H}</em>
             </div>
@@ -510,8 +541,10 @@ const CSS = `
 .citem{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer;border-left:3px solid transparent}
 .citem.on{background:#efe9f7;border-left-color:#4b2e83}
 .citem i{width:10px;height:10px;flex:none}
-.citem input{flex:1;border:none;background:transparent;font:inherit;min-width:0}
+.citem input[type=checkbox]{flex:none;width:13px;height:13px;margin:0}
+.citem input:not([type=checkbox]){flex:1;border:none;background:transparent;font:inherit;min-width:0}
 .citem em{font-style:normal;font-size:10.5px;color:#888;white-space:nowrap}
+.groupdot{font-size:10px;flex:none}
 .editor{padding:4px 12px 12px;border-top:1px solid #e3e3e3}
 .sect{margin:12px 0 5px;font-weight:600;font-size:12px}
 .sect em{font-weight:400;font-style:normal;color:#888;font-size:10.5px;margin-left:4px}
