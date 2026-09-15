@@ -91,7 +91,7 @@ function RotRow({ sel, upd, rotate, rotStep, axis, name }) {
   );
 }
 
-function View({ vk, comps, selId, onSelect, onDrag, onRotate, rotStep, fw, setFw }) {
+function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
   const V = VIEWS[vk];
   const wrapRef = useRef(null);
   const [vb, setVb] = useState(V.fit);
@@ -130,6 +130,10 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, rotStep, fw, setFw
       const [u, v] = toMM(e);
       const np = V.applyDrag(d.pos, u - d.u0, v - d.v0);
       onDrag(d.id, { x: Math.round(np.x * 10) / 10, y: Math.round(np.y * 10) / 10, z: Math.round(np.z * 10) / 10 });
+    } else if (d.kind === "rot") {
+      const dx = e.clientX - d.lastX;
+      if (dx) onRotate(d.id, d.axis, dx * 0.5);
+      d.lastX = e.clientX;
     } else {
       setVb([d.vb0[0] - (e.clientX - d.u0) / scale, d.vb0[1] - (e.clientY - d.v0) / scale, d.vb0[2], d.vb0[3]]);
     }
@@ -149,9 +153,13 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, rotStep, fw, setFw
     const top = Math.min(...pts.map((p) => p[1]));
     const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
     const r = 13 / scale, gap = 26 / scale, yy = top - 22 / scale;
+    const startRotDrag = (e) => {
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      dragRef.current = { kind: "rot", id: sel.id, axis: V.rotAxis, lastX: e.clientX };
+    };
     const btn = (dx, dir, glyph) => (
-      <g key={dir} transform={`translate(${cx + dx},${yy})`} className="rotbtn"
-        onPointerDown={(e) => { e.stopPropagation(); onRotate(sel.id, V.rotAxis, dir * rotStep); }}>
+      <g key={dir} transform={`translate(${cx + dx},${yy})`} className="rotbtn" onPointerDown={startRotDrag}>
         <circle r={r} />
         <text fontSize={15 / scale} dy={5 / scale}>{glyph}</text>
       </g>
@@ -301,9 +309,9 @@ export default function T38Packaging() {
         <div className="foot">{saved || "autosaves to shared layout storage"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
       </aside>
       <main className="views">
-        <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} rotStep={rotStep} fw={fw} setFw={setFw} /></div>
-        <div className="vtop"><View vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} rotStep={rotStep} fw={fw} setFw={setFw} /></div>
-        <div className="vrear"><View vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} rotStep={rotStep} fw={fw} setFw={setFw} /></div>
+        <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
+        <div className="vtop"><View vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
+        <div className="vrear"><View vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
       </main>
     </div>
   );
