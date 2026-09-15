@@ -137,6 +137,7 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
       ? { kind: "comp", u0, v0, group: group.map((c) => ({ id: c.id, pos: { x: c.x, y: c.y, z: c.z } })) }
       : { kind: "pan", u0: e.clientX, v0: e.clientY, vb0: [...vb] };
     if (comp && comp !== "fw") onSelect(comp.id);
+    else if (!comp) onSelect(null);
   };
   const move = (e) => {
     const d = dragRef.current; if (!d) return;
