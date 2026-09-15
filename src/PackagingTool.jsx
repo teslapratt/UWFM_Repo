@@ -272,7 +272,19 @@ export default function T38Packaging() {
   const [mockups, setMockups] = useState([]);
   const [mockupName, setMockupName] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [listH, setListH] = useState(220);
+  const resizeRef = useRef(null);
   const tRef = useRef(null);
+
+  const startResize = (e) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    resizeRef.current = { y0: e.clientY, h0: listH };
+  };
+  const onResizeMove = (e) => {
+    const r = resizeRef.current; if (!r) return;
+    setListH(Math.max(80, Math.min(window.innerHeight * 0.65, r.h0 + (e.clientY - r.y0))));
+  };
+  const onResizeUp = () => { resizeRef.current = null; };
 
   useEffect(() => {
     (async () => {
@@ -427,7 +439,7 @@ export default function T38Packaging() {
           <button className="btn" disabled={!sel?.groupId} onClick={ungroupSelected}>Ungroup</button>
         </div>
         <div className="hint" style={{ padding: "0 12px 8px" }}>Check components below, then hit Group. Dragging any member of a group moves the whole group.</div>
-        <div className="complist">
+        <div className="complist" style={{ height: listH }}>
           {comps.map((c) => (
             <div key={c.id} className={"citem" + (c.id === selId ? " on" : "")} onClick={() => setSelId(c.id)}>
               <input type="checkbox" checked={multiSel.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleMultiSel(c.id)} />
@@ -438,6 +450,7 @@ export default function T38Packaging() {
             </div>
           ))}
         </div>
+        <div className="resize-handle" title="Drag to resize" onPointerDown={startResize} onPointerMove={onResizeMove} onPointerUp={onResizeUp} onPointerCancel={onResizeUp} />
         <div className="panel-scroll">
           {sel ? (
             <div className="editor">
@@ -537,7 +550,10 @@ const CSS = `
 .btn.primary{background:#4b2e83;color:#fff;border-color:#4b2e83}
 .btn.danger:hover{border-color:#b91c1c;color:#b91c1c}
 .btn:disabled{opacity:.4;cursor:default}
-.complist{border-top:1px solid #e3e3e3;flex:1 1 auto;min-height:100px;max-height:45vh;overflow-y:auto}
+.complist{border-top:1px solid #e3e3e3;flex:none;overflow-y:auto}
+.resize-handle{flex:none;height:10px;cursor:row-resize;position:relative;background:#fafafa;touch-action:none}
+.resize-handle::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:4px;border-radius:2px;background:#d8d8d8}
+.resize-handle:hover::after{background:#4b2e83}
 .citem{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer;border-left:3px solid transparent}
 .citem.on{background:#efe9f7;border-left-color:#4b2e83}
 .citem i{width:10px;height:10px;flex:none}
