@@ -29,6 +29,16 @@ function projectWindowRect(vk, bounds) {
   return null;
 }
 
+// Inverse of projectWindowRect: turns a dragged u/v rectangle back into
+// real-world (mm) bounds for the given view.
+function rectToBounds(vk, r) {
+  const uMin = Math.min(r.u0, r.u1), uMax = Math.max(r.u0, r.u1);
+  const vMin = Math.min(r.v0, r.v1), vMax = Math.max(r.v0, r.v1);
+  if (vk === "top") return { xMin: -uMax, xMax: -uMin, yMin: -vMax, yMax: -vMin };
+  if (vk === "rear") return { yMin: uMin, yMax: uMax, zMin: -vMax, zMax: -vMin };
+  return null;
+}
+
 const D2R = Math.PI / 180;
 function rotMat(rx, ry, rz) {
   const a = rx * D2R, b = ry * D2R, c = rz * D2R;
@@ -121,11 +131,12 @@ function MockupThumb({ comps }) {
   );
 }
 
-function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, winRect }) {
+function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, winRect, drawing, onDrawWindow }) {
   const V = VIEWS[vk];
   const wrapRef = useRef(null);
   const [vb, setVb] = useState(V.fit);
   const [pxW, setPxW] = useState(600);
+  const [drawRect, setDrawRect] = useState(null);
   const dragRef = useRef(null);
 
   useEffect(() => {
@@ -143,6 +154,12 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
   const down = (e, comp) => {
     e.stopPropagation();
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    if (drawing) {
+      const [u0, v0] = toMM(e);
+      dragRef.current = { kind: "drawwin", u0, v0 };
+      setDrawRect({ u0, v0, u1: u0, v1: v0 });
+      return;
+    }
     const [u0, v0] = toMM(e);
     const group = comp && comp !== "fw" && comp.groupId ? comps.filter((c) => c.groupId === comp.groupId) : comp && comp !== "fw" ? [comp] : [];
     dragRef.current = comp === "fw"
@@ -173,11 +190,20 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
       const dx = e.clientX - d.lastX;
       if (dx) setFw((f) => ({ ...f, tilt: Math.round((f.tilt + dx * -0.5) * 10) / 10 }));
       d.lastX = e.clientX;
+    } else if (d.kind === "drawwin") {
+      const [u, v] = toMM(e);
+      setDrawRect({ u0: d.u0, v0: d.v0, u1: u, v1: v });
     } else {
       setVb([d.vb0[0] - (e.clientX - d.u0) / scale, d.vb0[1] - (e.clientY - d.v0) / scale, d.vb0[2], d.vb0[3]]);
     }
   };
-  const up = () => (dragRef.current = null);
+  const up = () => {
+    if (dragRef.current?.kind === "drawwin" && drawRect) {
+      onDrawWindow?.(rectToBounds(vk, drawRect));
+      setDrawRect(null);
+    }
+    dragRef.current = null;
+  };
   const wheel = (e) => {
     const [u, v] = toMM(e);
     const f = e.deltaY > 0 ? 1.15 : 1 / 1.15;
@@ -215,7 +241,7 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
     <div className="viewwrap" ref={wrapRef}>
       <div className="viewtag">{V.label}<span className="viewaxes">{V.axes[0]} →, {V.axes[1]} ↑ · scroll zoom · drag bg pan</span></div>
       <svg viewBox={vb.join(" ")} onPointerDown={(e) => down(e, null)} onPointerMove={move} onPointerUp={up} onWheel={wheel}
-        style={{ width: "100%", height: "100%", display: "block", touchAction: "none", cursor: "grab" }}>
+        style={{ width: "100%", height: "100%", display: "block", touchAction: "none", cursor: drawing ? "crosshair" : "grab" }}>
         <g className="mono">{GEOM[vk].map((s, i) => <polyline key={i} points={s} />)}</g>
         {solid && winRect && (
           <defs>
@@ -239,8 +265,17 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
             );
           })}
         </g>
-        {solid && winRect && (
+        {(solid || drawing) && winRect && (
           <rect x={winRect.x} y={winRect.y} width={winRect.w} height={winRect.h} className="winmarker" />
+        )}
+        {drawRect && (
+          <rect
+            x={Math.min(drawRect.u0, drawRect.u1)}
+            y={Math.min(drawRect.v0, drawRect.v1)}
+            width={Math.abs(drawRect.u1 - drawRect.u0)}
+            height={Math.abs(drawRect.v1 - drawRect.v0)}
+            className="winmarker-live"
+          />
         )}
         {fw.show && (vk === "side" || vk === "top") && (() => {
           const lbl = `firewall x=${fw.x}` + (fw.tilt ? ` / ${fw.tilt}\u00b0` : "");
@@ -302,10 +337,12 @@ export default function T38Packaging() {
   const [listH, setListH] = useState(220);
   const [solidView, setSolidView] = useState({ side: false, top: false, rear: false });
   const [windows, setWindows] = useState({
-    // Rough estimates — tune these to match the real raincover/rear cutout openings.
+    // Rough estimates — tune these to match the real raincover/rear cutout openings,
+    // or use the "Draw on view" buttons to trace them directly.
     raincover: { xMin: -900, xMax: -350, yMin: -200, yMax: 200 },
     rearCutout: { yMin: -150, yMax: 150, zMin: 150, zMax: 450 },
   });
+  const [drawMode, setDrawMode] = useState(null); // "raincover" | "rearCutout" | null
   const resizeRef = useRef(null);
   const dragCompId = useRef(null);
   const tRef = useRef(null);
@@ -319,6 +356,11 @@ export default function T38Packaging() {
     setListH(Math.max(80, Math.min(window.innerHeight * 0.65, r.h0 + (e.clientY - r.y0))));
   };
   const onResizeUp = () => { resizeRef.current = null; };
+
+  const commitWindow = (which, bounds) => {
+    setWindows((w) => ({ ...w, [which]: bounds }));
+    setDrawMode(null);
+  };
 
   useEffect(() => {
     (async () => {
@@ -554,7 +596,14 @@ export default function T38Packaging() {
             </div>
             {solidView.top && (
               <>
-                <div className="sect" style={{ margin: "6px 0 4px" }}>Raincover opening <em>Top view, mm — rough estimate, tune to match</em></div>
+                <div className="sect" style={{ margin: "6px 0 4px" }}>Raincover opening <em>Top view, mm</em></div>
+                <button
+                  className="btn"
+                  style={{ width: "100%", marginBottom: 6, background: drawMode === "raincover" ? "#4b2e83" : undefined, color: drawMode === "raincover" ? "#fff" : undefined }}
+                  onClick={() => setDrawMode((m) => (m === "raincover" ? null : "raincover"))}
+                >
+                  {drawMode === "raincover" ? "Drag on the Top view now…" : "Draw on Top view"}
+                </button>
                 <div className="grid3">
                   <label className="fld"><span>x min</span><Num value={windows.raincover.xMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMin: v } }))} /></label>
                   <label className="fld"><span>x max</span><Num value={windows.raincover.xMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMax: v } }))} /></label>
@@ -566,7 +615,14 @@ export default function T38Packaging() {
             )}
             {solidView.rear && (
               <>
-                <div className="sect" style={{ margin: "6px 0 4px" }}>Rear cutout <em>Rear view, mm — rough estimate, tune to match</em></div>
+                <div className="sect" style={{ margin: "6px 0 4px" }}>Rear cutout <em>Rear view, mm</em></div>
+                <button
+                  className="btn"
+                  style={{ width: "100%", marginBottom: 6, background: drawMode === "rearCutout" ? "#4b2e83" : undefined, color: drawMode === "rearCutout" ? "#fff" : undefined }}
+                  onClick={() => setDrawMode((m) => (m === "rearCutout" ? null : "rearCutout"))}
+                >
+                  {drawMode === "rearCutout" ? "Drag on the Rear view now…" : "Draw on Rear view"}
+                </button>
                 <div className="grid3">
                   <label className="fld"><span>y min</span><Num value={windows.rearCutout.yMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMin: v } }))} /></label>
                   <label className="fld"><span>y max</span><Num value={windows.rearCutout.yMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMax: v } }))} /></label>
@@ -582,8 +638,20 @@ export default function T38Packaging() {
       </aside>
       <main className="views">
         <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} solid={solidView.side} /></div>
-        <div className="vtop"><View vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} solid={solidView.top} winRect={projectWindowRect("top", windows.raincover)} /></div>
-        <div className="vrear"><View vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} solid={solidView.rear} winRect={projectWindowRect("rear", windows.rearCutout)} /></div>
+        <div className="vtop">
+          <View
+            vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw}
+            solid={solidView.top} winRect={projectWindowRect("top", windows.raincover)}
+            drawing={drawMode === "raincover"} onDrawWindow={(b) => commitWindow("raincover", b)}
+          />
+        </div>
+        <div className="vrear">
+          <View
+            vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw}
+            solid={solidView.rear} winRect={projectWindowRect("rear", windows.rearCutout)}
+            drawing={drawMode === "rearCutout"} onDrawWindow={(b) => commitWindow("rearCutout", b)}
+          />
+        </div>
       </main>
       <div className={"mockdrawer" + (drawerOpen ? " open" : "")}>
         <button className="mockdrawer-tab" onClick={() => setDrawerOpen((v) => !v)}>Mockups {mockups.length ? `(${mockups.length})` : ""}</button>
@@ -696,6 +764,7 @@ const CSS = `
 .rotbtn{cursor:pointer}
 .rotbtn circle{fill:#fff;stroke:#4b2e83;stroke-width:1.5;vector-effect:non-scaling-stroke}
 .winmarker{fill:none;stroke:#0f766e;stroke-width:1.4;stroke-dasharray:6 4;vector-effect:non-scaling-stroke;pointer-events:none}
+.winmarker-live{fill:#c11414;fill-opacity:.12;stroke:#c11414;stroke-width:1.6;stroke-dasharray:4 3;vector-effect:non-scaling-stroke;pointer-events:none}
 .rotbtn text{fill:#4b2e83;text-anchor:middle;user-select:none}
 .rotbtn:hover circle{fill:#efe9f7}
 @media (max-width:900px){.app{flex-direction:column;height:auto}.panel{width:100%;min-width:0}.views{grid-template-columns:1fr;grid-template-rows:260px 260px 300px}.vrear{grid-column:1;grid-row:3}}
