@@ -423,6 +423,16 @@ export default function T38Packaging() {
     setComps((cs) => cs.map((c) => (c.groupId === gid ? { ...c, groupId: null } : c)));
   };
 
+  const dragCompId = useRef(null);
+  const reorderComps = (targetId) => {
+    if (!dragCompId.current || dragCompId.current === targetId) return;
+    setComps((cs) => {
+      const ids = cs.map((c) => c.id).filter((id) => id !== dragCompId.current);
+      ids.splice(ids.indexOf(targetId), 0, dragCompId.current);
+      return ids.map((id) => cs.find((c) => c.id === id));
+    });
+  };
+
   return (
     <div className="app">
       <style>{CSS}</style>
@@ -441,7 +451,15 @@ export default function T38Packaging() {
         <div className="hint" style={{ padding: "0 12px 8px" }}>Check components below, then hit Group. Dragging any member of a group moves the whole group.</div>
         <div className="complist" style={{ height: listH }}>
           {comps.map((c) => (
-            <div key={c.id} className={"citem" + (c.id === selId ? " on" : "")} onClick={() => setSelId(c.id)}>
+            <div
+              key={c.id}
+              className={"citem" + (c.id === selId ? " on" : "")}
+              onClick={() => setSelId(c.id)}
+              draggable
+              onDragStart={() => { dragCompId.current = c.id; }}
+              onDragOver={(e) => { e.preventDefault(); reorderComps(c.id); }}
+              onDragEnd={() => { dragCompId.current = null; }}
+            >
               <input type="checkbox" checked={multiSel.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleMultiSel(c.id)} />
               <i style={{ background: c.color }} />
               {c.groupId && <span title="Grouped" className="groupdot">⛓</span>}
@@ -554,7 +572,7 @@ const CSS = `
 .resize-handle{flex:none;height:10px;cursor:row-resize;position:relative;background:#fafafa;touch-action:none}
 .resize-handle::after{content:"";position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:36px;height:4px;border-radius:2px;background:#d8d8d8}
 .resize-handle:hover::after{background:#4b2e83}
-.citem{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer;border-left:3px solid transparent}
+.citem{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:grab;border-left:3px solid transparent}
 .citem.on{background:#efe9f7;border-left-color:#4b2e83}
 .citem i{width:10px;height:10px;flex:none}
 .citem input[type=checkbox]{flex:none;width:13px;height:13px;margin:0}
