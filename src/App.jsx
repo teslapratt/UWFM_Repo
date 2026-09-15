@@ -675,21 +675,35 @@ function BOMTable({ rows, onUpdate }) {
 const DAY_MS = 86400000;
 const toDate = (s) => new Date(s + "T00:00");
 
-function MonthCalendar({ tasks, deliverables }) {
-  const DAY_W = 26;
-  const NAME_W = 220;
+function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
+  const DAY_W = 28;
+  const NAME_W = 240;
+  const ROW_H = 44;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const items = [
+  const rawItems = [
     ...tasks.map((t) => ({ ...t, kind: "task", from: t.start || t.due, to: t.due || t.start })),
     ...deliverables.map((d) => ({ ...d, kind: "deliv", from: d.due, to: d.due })),
-  ]
-    .filter((i) => i.from)
-    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : (a.to || a.from) < (b.to || b.from) ? -1 : 1));
+  ].filter((i) => i.from);
 
-  if (items.length === 0)
+  if (rawItems.length === 0)
     return <div style={{ padding: 30, color: "#666", fontSize: 13, border: "1px solid #ddd" }}>No dated tasks or deliverables yet — add dates in the table view and they'll appear here.</div>;
+
+  // Manual drag order (sidebar) wins; anything not yet ordered falls back to date order at the end.
+  const byId = new Map(rawItems.map((i) => [i.id, i]));
+  const dateSorted = [...rawItems].sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : (a.to || a.from) < (b.to || b.from) ? -1 : 1));
+  const orderedIds = order.filter((id) => byId.has(id));
+  const missing = dateSorted.filter((i) => !orderedIds.includes(i.id));
+  const items = [...orderedIds.map((id) => byId.get(id)), ...missing];
+
+  const dragId = React.useRef(null);
+  const reorderRows = (targetId) => {
+    if (!dragId.current || dragId.current === targetId || !onReorder) return;
+    const ids = items.map((i) => i.id).filter((id) => id !== dragId.current);
+    ids.splice(ids.indexOf(targetId), 0, dragId.current);
+    onReorder(ids);
+  };
 
   // Range: min start → max due, padded 3 days each side, always including today.
   let min = toDate(items[0].from);
@@ -718,20 +732,30 @@ function MonthCalendar({ tasks, deliverables }) {
     else months[months.length - 1].count++;
   }
 
-  const ROW_H = 30;
   const chartW = nDays * DAY_W;
 
   return (
-    <div style={{ border: "1px solid #000", overflowX: "auto" }}>
+    <div style={{ border: "1px solid #000" }}>
+      <div style={{ overflowX: "auto" }}>
       <div style={{ display: "flex", minWidth: NAME_W + chartW }}>
         {/* Fixed name column */}
         <div style={{ width: NAME_W, flexShrink: 0, borderRight: "1px solid #000", position: "sticky", left: 0, background: "#fff", zIndex: 2 }}>
-          <div style={{ height: 42, borderBottom: "1px solid #000", display: "flex", alignItems: "flex-end", padding: "4px 8px", fontSize: 12, fontWeight: 600 }}>
+          <div style={{ height: 46, borderBottom: "1px solid #000", display: "flex", alignItems: "flex-end", padding: "4px 12px", fontSize: 13, fontWeight: 700 }}>
             Task / deliverable
           </div>
           {items.map((it) => (
-            <div key={it.id} style={{ height: ROW_H, borderBottom: "1px solid #eee", display: "flex", alignItems: "center", padding: "0 8px", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {it.kind === "deliv" ? "◆ " : ""}{it.name}
+            <div
+              key={it.id}
+              draggable={!!onReorder}
+              onDragStart={() => { dragId.current = it.id; }}
+              onDragOver={(e) => { e.preventDefault(); reorderRows(it.id); }}
+              onDragEnd={() => { dragId.current = null; }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#f7f7f7")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
+              style={{ height: ROW_H, borderBottom: "1px solid #eee", display: "flex", alignItems: "center", gap: 8, padding: "0 12px", fontSize: 13, cursor: onReorder ? "grab" : "default", background: "#fff" }}
+            >
+              {onReorder && <span style={{ color: "#bbb", fontSize: 13, flexShrink: 0 }} title="Drag to reorder">⠿</span>}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.kind === "deliv" ? "◆ " : ""}{it.name}</span>
             </div>
           ))}
         </div>
@@ -739,20 +763,20 @@ function MonthCalendar({ tasks, deliverables }) {
         {/* Chart area */}
         <div style={{ position: "relative", width: chartW }}>
           {/* Month row */}
-          <div style={{ display: "flex", height: 20, borderBottom: "1px solid #ddd" }}>
+          <div style={{ display: "flex", height: 22, borderBottom: "1px solid #ddd" }}>
             {months.map((m, i) => (
-              <div key={i} style={{ width: m.count * DAY_W, fontSize: 11, fontWeight: 600, padding: "2px 4px", borderRight: "1px solid #ddd", whiteSpace: "nowrap", overflow: "hidden" }}>
+              <div key={i} style={{ width: m.count * DAY_W, fontSize: 12, fontWeight: 700, padding: "3px 4px", borderRight: "1px solid #ddd", whiteSpace: "nowrap", overflow: "hidden" }}>
                 {m.label}
               </div>
             ))}
           </div>
           {/* Day row */}
-          <div style={{ display: "flex", height: 22, borderBottom: "1px solid #000" }}>
+          <div style={{ display: "flex", height: 24, borderBottom: "1px solid #000" }}>
             {Array.from({ length: nDays }, (_, i) => {
               const d = new Date(min.getTime() + i * DAY_MS);
               const wknd = d.getDay() === 0 || d.getDay() === 6;
               return (
-                <div key={i} style={{ width: DAY_W, fontSize: 9, textAlign: "center", paddingTop: 5, color: wknd ? "#bbb" : "#666", background: wknd ? "#fafafa" : "#fff", ...S.mono }}>
+                <div key={i} style={{ width: DAY_W, fontSize: 10, textAlign: "center", paddingTop: 6, color: wknd ? "#bbb" : "#666", background: wknd ? "#fafafa" : "#fff", ...S.mono }}>
                   {d.getDate()}
                 </div>
               );
@@ -774,7 +798,7 @@ function MonthCalendar({ tasks, deliverables }) {
             ))}
             {/* Today line */}
             {todayX >= 0 && todayX <= chartW && (
-              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: -42, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
+              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: -46, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
             )}
             {/* Bars */}
             {items.map((it, r) => {
@@ -785,7 +809,7 @@ function MonthCalendar({ tasks, deliverables }) {
               const tip = `${it.name} — ${it.status}\n${fmtDate(it.from)}${it.to !== it.from ? " → " + fmtDate(it.to) : ""}${late ? "  (OVERDUE)" : ""}`;
               if (it.kind === "deliv")
                 return (
-                  <div key={it.id} title={tip} style={{ position: "absolute", left: x + DAY_W / 2 - 7, top: r * ROW_H + ROW_H / 2 - 7, width: 14, height: 14, background: c, transform: "rotate(45deg)", border: late ? "2px solid #c11414" : "none", cursor: "default" }} />
+                  <div key={it.id} title={tip} style={{ position: "absolute", left: x + DAY_W / 2 - 8, top: r * ROW_H + ROW_H / 2 - 8, width: 16, height: 16, background: c, transform: "rotate(45deg)", border: late ? "2px solid #c11414" : "none", borderRadius: 2, boxShadow: "0 1px 2px rgba(0,0,0,0.25)", cursor: "default" }} />
                 );
               return (
                 <div
@@ -794,29 +818,32 @@ function MonthCalendar({ tasks, deliverables }) {
                   style={{
                     position: "absolute",
                     left: x,
-                    top: r * ROW_H + 6,
+                    top: r * ROW_H + 8,
                     width: Math.max(w, DAY_W) - 2,
-                    height: ROW_H - 12,
+                    height: ROW_H - 16,
                     background: c,
                     border: late ? "2px solid #c11414" : "none",
+                    borderRadius: 3,
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
                     boxSizing: "border-box",
                     cursor: "default",
                     overflow: "hidden",
                   }}
                 >
-                  <span style={{ color: "#fff", fontSize: 10, lineHeight: `${ROW_H - 12}px`, padding: "0 4px", whiteSpace: "nowrap" }}>{it.name}</span>
+                  <span style={{ color: "#fff", fontSize: 11, fontWeight: 600, lineHeight: `${ROW_H - 16}px`, padding: "0 6px", whiteSpace: "nowrap" }}>{it.name}</span>
                 </div>
               );
             })}
           </div>
         </div>
       </div>
-      <div style={{ borderTop: "1px solid #000", padding: "4px 8px", fontSize: 11, color: "#666", display: "flex", gap: 16, flexWrap: "wrap" }}>
-        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#666" }} /> Not started</span>
-        <span><span style={{ display: "inline-block", width: 10, height: 10, background: ACCENT }} /> In progress</span>
-        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#0a7a2f" }} /> Complete</span>
-        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#c11414" }} /> Blocked</span>
-        <span>◆ deliverable · red outline = overdue · purple line = today</span>
+      </div>
+      <div style={{ borderTop: "1px solid #000", padding: "8px 12px", fontSize: 11, color: "#666", display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#666", borderRadius: 2 }} /> Not started</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: ACCENT, borderRadius: 2 }} /> In progress</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#0a7a2f", borderRadius: 2 }} /> Complete</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#c11414", borderRadius: 2 }} /> Blocked</span>
+        <span>◆ deliverable · red outline = overdue · purple line = today{onReorder ? " · drag ⠿ to reorder" : ""}</span>
       </div>
     </div>
   );
@@ -1226,7 +1253,14 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
           {tlView === "table" ? (
             <TaskTable rows={project.tasks} onUpdate={(tasks) => patch({ tasks })} isAdmin={isAdmin} />
           ) : (
-            <MonthCalendar tasks={project.tasks} deliverables={project.deliverables} />
+            <div style={{ position: "relative", left: "50%", right: "50%", width: "100vw", marginLeft: "-50vw", marginRight: "-50vw", padding: "0 20px" }}>
+              <MonthCalendar
+                tasks={project.tasks}
+                deliverables={project.deliverables}
+                order={project.timelineOrder || []}
+                onReorder={(order) => patch({ timelineOrder: order })}
+              />
+            </div>
           )}
         </div>
       )}
