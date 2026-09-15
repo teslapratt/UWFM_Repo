@@ -132,7 +132,7 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
       onDrag(d.id, { x: Math.round(np.x * 10) / 10, y: Math.round(np.y * 10) / 10, z: Math.round(np.z * 10) / 10 });
     } else if (d.kind === "rot") {
       const dx = e.clientX - d.lastX;
-      if (dx) onRotate(d.id, d.axis, dx * 0.5);
+      if (dx) onRotate(d.id, d.axis, dx * -0.5);
       d.lastX = e.clientX;
     } else {
       setVb([d.vb0[0] - (e.clientX - d.u0) / scale, d.vb0[1] - (e.clientY - d.v0) / scale, d.vb0[2], d.vb0[3]]);
@@ -150,13 +150,18 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
   if (sel) {
     const R = rotMat(sel.rx, sel.ry, sel.rz);
     const pts = boxCorners(sel.L + 2 * sel.cL, sel.W + 2 * sel.cW, sel.H + 2 * sel.cH, R, sel).map(V.proj);
-    const top = Math.min(...pts.map((p) => p[1]));
-    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    const liveTop = Math.min(...pts.map((p) => p[1]));
+    const liveCx = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+    // While actively dragging a handle, keep it fixed under the cursor instead of
+    // letting it drift as the box's rotated bounding box changes shape mid-drag.
+    const activeRot = dragRef.current?.kind === "rot" && dragRef.current.id === sel.id ? dragRef.current : null;
+    const top = activeRot ? activeRot.top : liveTop;
+    const cx = activeRot ? activeRot.cx : liveCx;
     const r = 13 / scale, gap = 26 / scale, yy = top - 22 / scale;
     const startRotDrag = (e) => {
       e.stopPropagation();
       e.currentTarget.setPointerCapture?.(e.pointerId);
-      dragRef.current = { kind: "rot", id: sel.id, axis: V.rotAxis, lastX: e.clientX };
+      dragRef.current = { kind: "rot", id: sel.id, axis: V.rotAxis, lastX: e.clientX, top: liveTop, cx: liveCx };
     };
     const btn = (dx, dir, glyph) => (
       <g key={dir} transform={`translate(${cx + dx},${yy})`} className="rotbtn" onPointerDown={startRotDrag}>
