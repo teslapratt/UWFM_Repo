@@ -321,31 +321,38 @@ export default function T38Packaging() {
 
   useEffect(() => {
     const onKey = (e) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod || e.key.toLowerCase() !== "z") return;
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
-      e.preventDefault();
-      if (!comps) return;
-      clearTimeout(historyTimer.current);
-      if (e.shiftKey) {
-        const next = redoRef.current.pop();
-        if (!next) return;
-        historyRef.current.push({ comps, fw });
-        pendingRef.current = next;
-        setComps(next.comps);
-        setFw(next.fw);
-      } else {
-        const prev = historyRef.current.pop();
-        if (!prev) return;
-        redoRef.current.push({ comps, fw });
-        pendingRef.current = prev;
-        setComps(prev.comps);
-        setFw(prev.fw);
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (!comps) return;
+        clearTimeout(historyTimer.current);
+        if (e.shiftKey) {
+          const next = redoRef.current.pop();
+          if (!next) return;
+          historyRef.current.push({ comps, fw });
+          pendingRef.current = next;
+          setComps(next.comps);
+          setFw(next.fw);
+        } else {
+          const prev = historyRef.current.pop();
+          if (!prev) return;
+          redoRef.current.push({ comps, fw });
+          pendingRef.current = prev;
+          setComps(prev.comps);
+          setFw(prev.fw);
+        }
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && comps && selId) {
+        e.preventDefault();
+        setComps((cs) => cs.filter((c) => c.id !== selId));
+        setSelId(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [comps, fw]);
+  }, [comps, fw, selId]);
 
   const persistMockups = async (list) => {
     setMockups(list);
@@ -400,44 +407,46 @@ export default function T38Packaging() {
             </div>
           ))}
         </div>
-        {sel ? (
-          <div className="editor">
-            <div className="sect">Exact dimensions <em>mm, before rotation</em></div>
+        <div className="panel-scroll">
+          {sel ? (
+            <div className="editor">
+              <div className="sect">Exact dimensions <em>mm, before rotation</em></div>
+              <div className="grid3">
+                <F sel={sel} upd={upd} label="L (x)" k="L" /><F sel={sel} upd={upd} label="W (y)" k="W" /><F sel={sel} upd={upd} label="H (z)" k="H" />
+              </div>
+              <div className="sect">Cushion <em>clearance per side</em></div>
+              <div className="grid3">
+                <F sel={sel} upd={upd} label="±L" k="cL" /><F sel={sel} upd={upd} label="±W" k="cW" /><F sel={sel} upd={upd} label="±H" k="cH" />
+              </div>
+              <div className="envelope">envelope {sel.L + 2 * sel.cL} × {sel.W + 2 * sel.cW} × {sel.H + 2 * sel.cH}</div>
+              <div className="sect">Position <em>box center, part coords</em></div>
+              <div className="grid3">
+                <F sel={sel} upd={upd} label="x" k="x" step={5} /><F sel={sel} upd={upd} label="y" k="y" step={5} /><F sel={sel} upd={upd} label="z" k="z" step={5} />
+              </div>
+              <div className="sect">Rotation <em>deg · step
+                <select value={rotStep} onChange={(e) => setRotStep(+e.target.value)}>{[5, 15, 45, 90].map((s) => <option key={s} value={s}>{s}°</option>)}</select></em>
+              </div>
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rx" name="rx (roll)" />
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="ry" name="ry (pitch)" />
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rz" name="rz (yaw)" />
+              <div className="sect">Color</div>
+              <div className="swatches">{PALETTE.map((p) => <b key={p} style={{ background: p, outline: sel.color === p ? "2px solid #111" : "none" }} onClick={() => upd(sel.id, { color: p })} />)}</div>
+            </div>
+          ) : (
+            <div className="hint">Select a component to edit. Drag boxes in any view — position updates on the two in-plane axes. Arrows above a selected box rotate about that view's normal axis.</div>
+          )}
+          <div className="editor" style={{ borderTop: "1px solid #e3e3e3" }}>
+            <div className="sect">Firewall <em>driver seatback plane</em></div>
             <div className="grid3">
-              <F sel={sel} upd={upd} label="L (x)" k="L" /><F sel={sel} upd={upd} label="W (y)" k="W" /><F sel={sel} upd={upd} label="H (z)" k="H" />
+              <label className="fld"><span>x station</span><Num value={fw.x} step={5} onChange={(v) => setFw((f) => ({ ...f, x: v }))} /></label>
+              <label className="fld"><span>tilt °</span><Num value={fw.tilt} step={1} onChange={(v) => setFw((f) => ({ ...f, tilt: v }))} /></label>
+              <label className="fld" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
+                <input type="checkbox" checked={fw.show} onChange={(e) => setFw((f) => ({ ...f, show: e.target.checked }))} /> show
+              </label>
             </div>
-            <div className="sect">Cushion <em>clearance per side</em></div>
-            <div className="grid3">
-              <F sel={sel} upd={upd} label="±L" k="cL" /><F sel={sel} upd={upd} label="±W" k="cW" /><F sel={sel} upd={upd} label="±H" k="cH" />
-            </div>
-            <div className="envelope">envelope {sel.L + 2 * sel.cL} × {sel.W + 2 * sel.cW} × {sel.H + 2 * sel.cH}</div>
-            <div className="sect">Position <em>box center, part coords</em></div>
-            <div className="grid3">
-              <F sel={sel} upd={upd} label="x" k="x" step={5} /><F sel={sel} upd={upd} label="y" k="y" step={5} /><F sel={sel} upd={upd} label="z" k="z" step={5} />
-            </div>
-            <div className="sect">Rotation <em>deg · step
-              <select value={rotStep} onChange={(e) => setRotStep(+e.target.value)}>{[5, 15, 45, 90].map((s) => <option key={s} value={s}>{s}°</option>)}</select></em>
-            </div>
-            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rx" name="rx (roll)" />
-            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="ry" name="ry (pitch)" />
-            <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rz" name="rz (yaw)" />
-            <div className="sect">Color</div>
-            <div className="swatches">{PALETTE.map((p) => <b key={p} style={{ background: p, outline: sel.color === p ? "2px solid #111" : "none" }} onClick={() => upd(sel.id, { color: p })} />)}</div>
           </div>
-        ) : (
-          <div className="hint">Select a component to edit. Drag boxes in any view — position updates on the two in-plane axes. Arrows above a selected box rotate about that view's normal axis.</div>
-        )}
-        <div className="editor" style={{ borderTop: "1px solid #e3e3e3" }}>
-          <div className="sect">Firewall <em>driver seatback plane</em></div>
-          <div className="grid3">
-            <label className="fld"><span>x station</span><Num value={fw.x} step={5} onChange={(v) => setFw((f) => ({ ...f, x: v }))} /></label>
-            <label className="fld"><span>tilt °</span><Num value={fw.tilt} step={1} onChange={(v) => setFw((f) => ({ ...f, tilt: v }))} /></label>
-            <label className="fld" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
-              <input type="checkbox" checked={fw.show} onChange={(e) => setFw((f) => ({ ...f, show: e.target.checked }))} /> show
-            </label>
-          </div>
+          <div className="foot">{(saved || "autosaves to shared layout storage") + " · Ctrl/Cmd+Z to undo · Delete to remove selected"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
         </div>
-        <div className="foot">{(saved || "autosaves to shared layout storage") + " · Ctrl/Cmd+Z to undo"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
       </aside>
       <main className="views">
         <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
@@ -486,7 +495,8 @@ const CSS = `
 *{box-sizing:border-box;margin:0}
 .app{display:flex;height:100%;background:#fff;color:#111;font:13px/1.45 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-variant-numeric:tabular-nums}
 .loading{padding:40px;font:14px sans-serif}
-.panel{width:300px;min-width:300px;border-right:1px solid #d8d8d8;display:flex;flex-direction:column;overflow-y:auto;background:#fafafa}
+.panel{width:300px;min-width:300px;border-right:1px solid #d8d8d8;display:flex;flex-direction:column;overflow:hidden;background:#fafafa}
+.panel-scroll{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column}
 .brand{padding:14px 14px 10px;border-bottom:1px solid #e3e3e3}
 .brand{font-weight:700;font-size:15px;color:#4b2e83;letter-spacing:.2px}
 .brand span{display:block;font-weight:400;font-size:10.5px;color:#777;margin-top:3px;line-height:1.5}
