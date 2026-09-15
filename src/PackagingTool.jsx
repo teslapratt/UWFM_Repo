@@ -59,6 +59,7 @@ const mkComp = (n, over = {}) => ({
 });
 
 const STORE_KEY = "t38-packaging-v1";
+const MOCKUPS_KEY = "t38-packaging-mockups-v1";
 
 function Num({ value, onChange, step = 1, w = 66 }) {
   const [txt, setTxt] = useState(null);
@@ -248,6 +249,8 @@ export default function T38Packaging() {
   const [selId, setSelId] = useState(null);
   const [rotStep, setRotStep] = useState(15);
   const [saved, setSaved] = useState("");
+  const [mockups, setMockups] = useState([]);
+  const [mockupName, setMockupName] = useState("");
   const tRef = useRef(null);
 
   useEffect(() => {
@@ -273,6 +276,42 @@ export default function T38Packaging() {
     }, 700);
   }, [comps, fw]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get(MOCKUPS_KEY);
+        setMockups(JSON.parse(r.value) || []);
+      } catch (_) { setMockups([]); }
+    })();
+  }, []);
+
+  const persistMockups = async (list) => {
+    setMockups(list);
+    try { await window.storage.set(MOCKUPS_KEY, JSON.stringify(list)); } catch (_) {}
+  };
+  const saveMockup = () => {
+    const name = mockupName.trim();
+    if (!name) return;
+    const snap = { id: "m" + Date.now().toString(36), name, savedAt: new Date().toISOString(), comps, uid, fw };
+    persistMockups([...mockups, snap]);
+    setMockupName("");
+  };
+  const loadMockup = (m) => {
+    if (!window.confirm(`Load "${m.name}"? This replaces the current layout (still saved under Mockups).`)) return;
+    uid = m.uid || uid;
+    setComps(m.comps);
+    setFw(m.fw || fw);
+    setSelId(null);
+  };
+  const duplicateMockup = (m) => {
+    persistMockups([...mockups, { ...m, id: "m" + Date.now().toString(36), name: m.name + " copy", savedAt: new Date().toISOString() }]);
+  };
+  const renameMockup = (id, name) => persistMockups(mockups.map((m) => (m.id === id ? { ...m, name } : m)));
+  const deleteMockup = (id) => {
+    if (!window.confirm("Delete this mockup?")) return;
+    persistMockups(mockups.filter((m) => m.id !== id));
+  };
+
   if (!comps) return <div className="loading">Loading layout…</div>;
 
   const upd = (id, patch) => setComps((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -286,6 +325,7 @@ export default function T38Packaging() {
         <div className="brand">T38 packaging<span>monocoque 2279.87 × 690.04 × 525.00 mm · exact STEP geometry · nose x=−1693.8 · cockpit −979…−322 · rear bulkhead x=+586.1 (face z 119.4–509.7, h 390.3) · y ±345.0 · z 30…555</span></div>
         <div className="row">
           <button className="btn primary" onClick={() => { const c = mkComp("Component " + comps.length); setComps((cs) => [...cs, c]); setSelId(c.id); }}>Add component</button>
+          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++, name: sel.name + " copy", x: sel.x + 50 }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Duplicate</button>
           <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++ , name: sel.name + " copy", y: -sel.y }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Mirror ↔</button>
           <button className="btn danger" disabled={!sel} onClick={() => { setComps((cs) => cs.filter((c) => c.id !== sel.id)); setSelId(null); }}>Delete</button>
         </div>
@@ -335,6 +375,34 @@ export default function T38Packaging() {
             </label>
           </div>
         </div>
+        <div className="editor" style={{ borderTop: "1px solid #e3e3e3" }}>
+          <div className="sect">Mockups <em>named saved layouts</em></div>
+          <div className="row" style={{ padding: "6px 0" }}>
+            <input
+              className="mockname-input"
+              style={{ flex: 1 }}
+              placeholder="Name this layout…"
+              value={mockupName}
+              onChange={(e) => setMockupName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveMockup()}
+            />
+            <button className="btn primary" disabled={!mockupName.trim()} onClick={saveMockup}>Save current</button>
+          </div>
+          <div className="mocklist">
+            {mockups.length === 0 && <div className="hint" style={{ padding: "6px 0" }}>No saved mockups yet — name the current layout above and save it.</div>}
+            {mockups.map((m) => (
+              <div key={m.id} className="mockitem">
+                <input value={m.name} onChange={(e) => renameMockup(m.id, e.target.value)} />
+                <div className="mockmeta">saved {new Date(m.savedAt).toLocaleString()} · {m.comps.length} component{m.comps.length === 1 ? "" : "s"}</div>
+                <div className="mockrow">
+                  <button className="btn" onClick={() => loadMockup(m)}>Load</button>
+                  <button className="btn" onClick={() => duplicateMockup(m)}>Duplicate</button>
+                  <button className="btn danger" onClick={() => deleteMockup(m.id)}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
         <div className="foot">{saved || "autosaves to shared layout storage"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
       </aside>
       <main className="views">
@@ -382,6 +450,14 @@ const CSS = `
 .swatches{display:flex;gap:6px}
 .swatches b{width:18px;height:18px;cursor:pointer}
 .hint{padding:14px;color:#777;font-size:12px}
+.mockname-input{border:1px solid #ccc;padding:5px 7px;font:inherit;font-size:12px}
+.mocklist{max-height:260px;overflow-y:auto}
+.mockitem{padding:8px 0;border-top:1px solid #f0f0f0}
+.mockitem input{width:100%;border:none;background:transparent;font:inherit;font-weight:600;font-size:12.5px;padding:2px 0;border-bottom:1px dashed transparent}
+.mockitem input:hover,.mockitem input:focus{border-bottom-color:#bbb;outline:none}
+.mockmeta{font-size:10px;color:#999;margin:2px 0 6px}
+.mockrow{display:flex;gap:6px}
+.mockrow .btn{flex:1;font-size:11px;padding:4px 2px}
 .foot{margin-top:auto;padding:10px 12px;font-size:10.5px;color:#999;border-top:1px solid #e3e3e3;display:flex;justify-content:space-between;align-items:center}
 .link{border:none;background:none;color:#4b2e83;cursor:pointer;font-size:10.5px;text-decoration:underline}
 .views{flex:1;display:grid;grid-template-columns:1fr 340px;grid-template-rows:1fr 1fr;gap:1px;background:#d8d8d8;min-width:0}
