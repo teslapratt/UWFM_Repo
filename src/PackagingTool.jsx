@@ -275,6 +275,7 @@ export default function T38Packaging() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [listH, setListH] = useState(220);
   const resizeRef = useRef(null);
+  const dragCompId = useRef(null);
   const tRef = useRef(null);
 
   const startResize = (e) => {
@@ -424,7 +425,6 @@ export default function T38Packaging() {
     setComps((cs) => cs.map((c) => (c.groupId === gid ? { ...c, groupId: null } : c)));
   };
 
-  const dragCompId = useRef(null);
   const reorderComps = (targetId) => {
     if (!dragCompId.current || dragCompId.current === targetId) return;
     setComps((cs) => {
