@@ -92,6 +92,21 @@ function RotRow({ sel, upd, rotate, rotStep, axis, name }) {
   );
 }
 
+// Small static side-view preview used on mockup cards in the drawer.
+function MockupThumb({ comps }) {
+  const V = VIEWS.side;
+  return (
+    <svg viewBox={V.fit.join(" ")} style={{ pointerEvents: "none" }}>
+      <g className="mono">{GEOM.side.map((s, i) => <polyline key={i} points={s} />)}</g>
+      {comps.map((c) => {
+        const R = rotMat(c.rx, c.ry, c.rz);
+        const ex = hull(boxCorners(c.L, c.W, c.H, R, c).map(V.proj));
+        return <polygon key={c.id} className="mockthumb-comp" points={ex.map((p) => p.join(",")).join(" ")} fill={c.color} stroke={c.color} />;
+      })}
+    </svg>
+  );
+}
+
 function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw }) {
   const V = VIEWS[vk];
   const wrapRef = useRef(null);
@@ -251,6 +266,7 @@ export default function T38Packaging() {
   const [saved, setSaved] = useState("");
   const [mockups, setMockups] = useState([]);
   const [mockupName, setMockupName] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const tRef = useRef(null);
 
   useEffect(() => {
@@ -375,34 +391,6 @@ export default function T38Packaging() {
             </label>
           </div>
         </div>
-        <div className="editor" style={{ borderTop: "1px solid #e3e3e3" }}>
-          <div className="sect">Mockups <em>named saved layouts</em></div>
-          <div className="row" style={{ padding: "6px 0" }}>
-            <input
-              className="mockname-input"
-              style={{ flex: 1 }}
-              placeholder="Name this layout…"
-              value={mockupName}
-              onChange={(e) => setMockupName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveMockup()}
-            />
-            <button className="btn primary" disabled={!mockupName.trim()} onClick={saveMockup}>Save current</button>
-          </div>
-          <div className="mocklist">
-            {mockups.length === 0 && <div className="hint" style={{ padding: "6px 0" }}>No saved mockups yet — name the current layout above and save it.</div>}
-            {mockups.map((m) => (
-              <div key={m.id} className="mockitem">
-                <input value={m.name} onChange={(e) => renameMockup(m.id, e.target.value)} />
-                <div className="mockmeta">saved {new Date(m.savedAt).toLocaleString()} · {m.comps.length} component{m.comps.length === 1 ? "" : "s"}</div>
-                <div className="mockrow">
-                  <button className="btn" onClick={() => loadMockup(m)}>Load</button>
-                  <button className="btn" onClick={() => duplicateMockup(m)}>Duplicate</button>
-                  <button className="btn danger" onClick={() => deleteMockup(m.id)}>Delete</button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
         <div className="foot">{saved || "autosaves to shared layout storage"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
       </aside>
       <main className="views">
@@ -410,6 +398,40 @@ export default function T38Packaging() {
         <div className="vtop"><View vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
         <div className="vrear"><View vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} /></div>
       </main>
+      <div className={"mockdrawer" + (drawerOpen ? " open" : "")}>
+        <button className="mockdrawer-tab" onClick={() => setDrawerOpen((v) => !v)}>Mockups {mockups.length ? `(${mockups.length})` : ""}</button>
+        <div className="mockdrawer-head">
+          <span>Mockups</span>
+          <button className="link" onClick={() => setDrawerOpen(false)}>close ✕</button>
+        </div>
+        <div className="row" style={{ padding: "10px 12px", borderBottom: "1px solid #e3e3e3" }}>
+          <input
+            className="mockname-input"
+            style={{ flex: 1 }}
+            placeholder="Name this layout…"
+            value={mockupName}
+            onChange={(e) => setMockupName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveMockup()}
+          />
+          <button className="btn primary" disabled={!mockupName.trim()} onClick={saveMockup}>Save</button>
+        </div>
+        <div className="mockcards">
+          {mockups.length === 0 && <div className="hint">No saved mockups yet — name the current layout above and save it.</div>}
+          {mockups.map((m) => (
+            <div key={m.id} className="mockcard">
+              <div className="mockthumb" onClick={() => loadMockup(m)} title="Load this mockup">
+                <MockupThumb comps={m.comps} />
+              </div>
+              <input value={m.name} onChange={(e) => renameMockup(m.id, e.target.value)} />
+              <div className="mockmeta">{new Date(m.savedAt).toLocaleDateString()} · {m.comps.length} comp{m.comps.length === 1 ? "" : "s"}</div>
+              <div className="mockrow">
+                <button className="btn" onClick={() => duplicateMockup(m)}>Duplicate</button>
+                <button className="btn danger" onClick={() => deleteMockup(m.id)}>Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -451,10 +473,18 @@ const CSS = `
 .swatches b{width:18px;height:18px;cursor:pointer}
 .hint{padding:14px;color:#777;font-size:12px}
 .mockname-input{border:1px solid #ccc;padding:5px 7px;font:inherit;font-size:12px}
-.mocklist{max-height:260px;overflow-y:auto}
-.mockitem{padding:8px 0;border-top:1px solid #f0f0f0}
-.mockitem input{width:100%;border:none;background:transparent;font:inherit;font-weight:600;font-size:12.5px;padding:2px 0;border-bottom:1px dashed transparent}
-.mockitem input:hover,.mockitem input:focus{border-bottom-color:#bbb;outline:none}
+.mockdrawer{position:fixed;top:45px;right:0;width:250px;height:calc(100vh - 45px);background:#fff;border-left:1px solid #d8d8d8;box-shadow:-6px 0 16px rgba(0,0,0,.1);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;z-index:20}
+.mockdrawer.open{transform:translateX(0)}
+.mockdrawer-tab{position:absolute;top:50%;left:-32px;transform:translateY(-50%);width:32px;padding:14px 6px;background:#4b2e83;color:#fff;border:none;border-radius:6px 0 0 6px;cursor:pointer;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:mixed;letter-spacing:.3px}
+.mockdrawer-head{display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid #e3e3e3;font-weight:700;font-size:13px}
+.mockcards{flex:1;overflow-y:auto;padding:10px 12px}
+.mockcard{border:1px solid #e3e3e3;padding:8px;margin-bottom:10px}
+.mockthumb{border:1px solid #eee;background:#fafafa;height:64px;cursor:pointer;margin-bottom:6px}
+.mockthumb:hover{border-color:#4b2e83}
+.mockthumb svg{width:100%;height:100%;display:block}
+.mockthumb-comp{fill-opacity:.55;stroke-width:1.4;vector-effect:non-scaling-stroke}
+.mockcard input{width:100%;border:none;background:transparent;font:inherit;font-weight:600;font-size:12.5px;padding:2px 0;border-bottom:1px dashed transparent}
+.mockcard input:hover,.mockcard input:focus{border-bottom-color:#bbb;outline:none}
 .mockmeta{font-size:10px;color:#999;margin:2px 0 6px}
 .mockrow{display:flex;gap:6px}
 .mockrow .btn{flex:1;font-size:11px;padding:4px 2px}
