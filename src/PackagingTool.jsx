@@ -506,7 +506,7 @@ const CSS = `
 .btn.primary{background:#4b2e83;color:#fff;border-color:#4b2e83}
 .btn.danger:hover{border-color:#b91c1c;color:#b91c1c}
 .btn:disabled{opacity:.4;cursor:default}
-.complist{border-top:1px solid #e3e3e3;max-height:170px;overflow-y:auto}
+.complist{border-top:1px solid #e3e3e3;flex:1 1 auto;min-height:100px;max-height:45vh;overflow-y:auto}
 .citem{display:flex;align-items:center;gap:7px;padding:5px 12px;cursor:pointer;border-left:3px solid transparent}
 .citem.on{background:#efe9f7;border-left-color:#4b2e83}
 .citem i{width:10px;height:10px;flex:none}
