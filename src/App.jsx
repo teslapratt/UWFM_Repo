@@ -675,7 +675,82 @@ function BOMTable({ rows, onUpdate }) {
 const DAY_MS = 86400000;
 const toDate = (s) => new Date(s + "T00:00");
 
-function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
+// Turns "M/D" text into a resolver that tracks its own running year, bumping
+// forward whenever the month drops (e.g. 12/20 → 1/23 rolls into next year).
+// Each outline section (the Gates summary line vs. the phase/task body) gets
+// its own resolver since both restart from the same beginning-of-timeline date.
+function makeDateResolver(refYear) {
+  let year = refYear;
+  let lastMonth = null;
+  return (md) => {
+    const [m, d] = md.split("/").map(Number);
+    if (lastMonth !== null && m < lastMonth - 1) year += 1;
+    lastMonth = m;
+    return `${year}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+}
+
+// Parses a pasted deliverable-timeline outline (gates line, PHASE headers with
+// date ranges + a description line, "M/D — task" bullets, trailing CRITICAL
+// PATH section) into structured gates/phases/tasks/criticalPath.
+function parseTimelineOutline(text, refYear) {
+  const gates = [];
+  const phases = [];
+  const tasks = [];
+  let criticalPath = "";
+  let curPhase = null;
+  let inCriticalPath = false;
+  const gateDate = makeDateResolver(refYear);
+  const bodyDate = makeDateResolver(refYear);
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^CRITICAL PATH$/i.test(line)) { inCriticalPath = true; continue; }
+    if (inCriticalPath) { criticalPath += (criticalPath ? "\n" : "") + line; continue; }
+
+    const gatesLine = line.match(/^Gates:\s*(.+)$/i);
+    if (gatesLine) {
+      gatesLine[1].split("|").forEach((seg) => {
+        const m = seg.trim().match(/^(.+?)\s+(\d{1,2}\/\d{1,2})$/);
+        if (m) gates.push({ id: uid(), name: m[1].trim(), date: gateDate(m[2]) });
+      });
+      continue;
+    }
+
+    const phaseHeader = line.match(/^(.+?)\s*\((\d{1,2}\/\d{1,2})\s*[–-]\s*(\d{1,2}\/\d{1,2})/);
+    if (phaseHeader) {
+      // Only the "from" date advances the shared running resolver — it's the
+      // next true chronological point in the walk through the outline. The
+      // "to" date is derived relative to "from" instead of also being fed
+      // through bodyDate; otherwise it'd peek ahead (e.g. a phase ending in
+      // March of next year) and desync the year for every bullet that
+      // follows within that same phase, which still belongs to the earlier year.
+      const from = bodyDate(phaseHeader[2]);
+      const [fromM] = phaseHeader[2].split("/").map(Number);
+      const [toM, toD] = phaseHeader[3].split("/").map(Number);
+      const fromYear = Number(from.slice(0, 4));
+      const toYear = toM < fromM ? fromYear + 1 : fromYear;
+      const to = `${toYear}-${String(toM).padStart(2, "0")}-${String(toD).padStart(2, "0")}`;
+      curPhase = { id: uid(), name: phaseHeader[1].trim(), from, to, description: "" };
+      phases.push(curPhase);
+      continue;
+    }
+
+    const bullet = line.match(/^(\d{1,2}\/\d{1,2})\s*[—-]+\s*(.+)$/);
+    if (bullet) {
+      tasks.push({ id: uid(), name: bullet[2].trim(), due: bodyDate(bullet[1]), status: "Not Started", category: curPhase ? curPhase.name : "Milestone" });
+      continue;
+    }
+
+    if (curPhase && !curPhase.description) curPhase.description = line;
+  }
+  return { gates, phases, tasks, criticalPath };
+}
+
+const PHASE_BANDS = ["#f3f0fa", "#eef6f4", "#fdf4ea", "#eef2fb"];
+
+function MonthCalendar({ tasks, deliverables, phases = [], gates = [], order = [], onReorder }) {
   const DAY_W = 28;
   const NAME_W = 240;
   const ROW_H = 44;
@@ -712,6 +787,16 @@ function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
     const f = toDate(i.from), t = toDate(i.to || i.from);
     if (f < min) min = f;
     if (t > max) max = t;
+  });
+  phases.forEach((p) => {
+    const f = toDate(p.from), t = toDate(p.to);
+    if (f < min) min = f;
+    if (t > max) max = t;
+  });
+  gates.forEach((g) => {
+    const d = toDate(g.date);
+    if (d < min) min = d;
+    if (d > max) max = d;
   });
   if (today < min) min = today;
   if (today > max) max = today;
@@ -762,6 +847,24 @@ function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
 
         {/* Chart area */}
         <div style={{ position: "relative", width: chartW }}>
+          {/* Phase row */}
+          {phases.length > 0 && (
+            <div style={{ display: "flex", height: 20, borderBottom: "1px solid #ddd", position: "relative" }}>
+              {phases.map((p, i) => {
+                const x = dayX(p.from);
+                const w = (Math.round((toDate(p.to) - toDate(p.from)) / DAY_MS) + 1) * DAY_W;
+                return (
+                  <div
+                    key={p.id}
+                    title={p.description}
+                    style={{ position: "absolute", left: x, width: w, top: 0, bottom: 0, background: PHASE_BANDS[i % PHASE_BANDS.length], borderRight: "1px solid #ddd", fontSize: 10, fontWeight: 700, padding: "3px 4px", whiteSpace: "nowrap", overflow: "hidden" }}
+                  >
+                    {p.name}
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {/* Month row */}
           <div style={{ display: "flex", height: 22, borderBottom: "1px solid #ddd" }}>
             {months.map((m, i) => (
@@ -785,11 +888,17 @@ function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
 
           {/* Grid + weekend shading behind bars */}
           <div style={{ position: "relative", height: items.length * ROW_H }}>
+            {/* Phase background bands */}
+            {phases.map((p, i) => {
+              const x = dayX(p.from);
+              const w = (Math.round((toDate(p.to) - toDate(p.from)) / DAY_MS) + 1) * DAY_W;
+              return <div key={p.id} style={{ position: "absolute", left: x, width: w, top: 0, bottom: 0, background: PHASE_BANDS[i % PHASE_BANDS.length], opacity: 0.5 }} />;
+            })}
             {Array.from({ length: nDays }, (_, i) => {
               const d = new Date(min.getTime() + i * DAY_MS);
               const wknd = d.getDay() === 0 || d.getDay() === 6;
               return (
-                <div key={i} style={{ position: "absolute", left: i * DAY_W, top: 0, bottom: 0, width: DAY_W, background: wknd ? "#fafafa" : "none", borderRight: "1px solid #f0f0f0" }} />
+                <div key={i} style={{ position: "absolute", left: i * DAY_W, top: 0, bottom: 0, width: DAY_W, background: wknd ? "rgba(0,0,0,0.04)" : "none", borderRight: "1px solid #f0f0f0" }} />
               );
             })}
             {/* Row separators */}
@@ -798,8 +907,18 @@ function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
             ))}
             {/* Today line */}
             {todayX >= 0 && todayX <= chartW && (
-              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: -46, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
+              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: phases.length ? -66 : -46, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
             )}
+            {/* Gates */}
+            {gates.map((g) => {
+              const gx = dayX(g.date) + DAY_W / 2;
+              if (gx < 0 || gx > chartW) return null;
+              return (
+                <div key={g.id} style={{ position: "absolute", left: gx, top: phases.length ? -66 : -46, bottom: 0, width: 0, borderLeft: "2px dashed #c17d0a", zIndex: 1 }}>
+                  <div style={{ position: "absolute", top: -14, left: 4, fontSize: 10, fontWeight: 700, color: "#c17d0a", whiteSpace: "nowrap" }}>{g.name}</div>
+                </div>
+              );
+            })}
             {/* Bars */}
             {items.map((it, r) => {
               const c = statusColor(it.status);
@@ -843,7 +962,7 @@ function MonthCalendar({ tasks, deliverables, order = [], onReorder }) {
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: ACCENT, borderRadius: 2 }} /> In progress</span>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#0a7a2f", borderRadius: 2 }} /> Complete</span>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#c11414", borderRadius: 2 }} /> Blocked</span>
-        <span>◆ deliverable · red outline = overdue · purple line = today{onReorder ? " · drag ⠿ to reorder" : ""}</span>
+        <span>◆ deliverable · red outline = overdue · purple line = today{gates.length ? " · orange dashed = gate" : ""}{onReorder ? " · drag ⠿ to reorder" : ""}</span>
       </div>
     </div>
   );
@@ -1137,6 +1256,23 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
   const patch = (p) => onChange({ ...project, ...p });
   const bom = project.bom || [];
   const info = project.info || { description: "", mdsUrl: "", debriefUrl: "", links: [] };
+  const gates = project.gates || [];
+  const phases = project.phases || [];
+
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importYear, setImportYear] = useState(new Date().getFullYear());
+  const importOutline = () => {
+    const parsed = parseTimelineOutline(importText, importYear);
+    patch({
+      gates: parsed.gates,
+      phases: parsed.phases,
+      tasks: [...project.tasks, ...parsed.tasks],
+      criticalPath: parsed.criticalPath || project.criticalPath || "",
+    });
+    setShowImport(false);
+    setImportText("");
+  };
 
   const openTasks = project.tasks.filter((t) => t.status !== "Complete").length;
   const overdue = [...project.tasks, ...project.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
@@ -1232,24 +1368,69 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
 
       {tab === "timeline" && (
         <div>
-          <div style={{ display: "inline-flex", border: "1px solid #000", marginBottom: 10 }}>
-            {[["table", "Table"], ["calendar", "Bar view"]].map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setTlView(id)}
-                style={{
-                  ...S.btn,
-                  border: "none",
-                  background: tlView === id ? "#000" : "#fff",
-                  color: tlView === id ? "#fff" : "#000",
-                  fontSize: 12,
-                  padding: "4px 14px",
-                }}
-              >
-                {label}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+            <div style={{ display: "inline-flex", border: "1px solid #000" }}>
+              {[["table", "Table"], ["calendar", "Bar view"]].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setTlView(id)}
+                  style={{
+                    ...S.btn,
+                    border: "none",
+                    background: tlView === id ? "#000" : "#fff",
+                    color: tlView === id ? "#fff" : "#000",
+                    fontSize: 12,
+                    padding: "4px 14px",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {isAdmin && (
+              <button style={{ ...S.btn, fontSize: 12 }} onClick={() => setShowImport((v) => !v)}>
+                {showImport ? "Cancel import" : "Import outline"}
               </button>
-            ))}
+            )}
           </div>
+
+          {showImport && (
+            <div style={{ border: "1px solid #000", padding: 12, marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+                Paste a deliverable-timeline outline (Gates line, PHASE headers with "(M/D – M/D)" ranges, "M/D — task" bullets, trailing CRITICAL PATH section). Parsed gates/phases replace existing ones; tasks are added to the current list.
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                <label style={{ fontSize: 12, display: "flex", gap: 6, alignItems: "center" }}>
+                  Reference year (for the first M/D date)
+                  <input type="number" style={{ ...S.input, width: 80 }} value={importYear} onChange={(e) => setImportYear(+e.target.value)} />
+                </label>
+              </div>
+              <textarea
+                style={{ ...S.input, minHeight: 200, lineHeight: 1.5, fontFamily: "monospace", fontSize: 12 }}
+                placeholder="Paste the full outline here…"
+                value={importText}
+                onChange={(e) => setImportText(e.target.value)}
+              />
+              <div style={{ marginTop: 8 }}>
+                <button style={S.btnPrimary} onClick={importOutline} disabled={!importText.trim()}>Parse &amp; import</button>
+              </div>
+            </div>
+          )}
+
+          {gates.length > 0 && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, fontSize: 12 }}>
+              {gates.map((g) => (
+                <span key={g.id} style={{ border: "1px solid #c17d0a", color: "#c17d0a", padding: "3px 8px" }}>{g.name} — {fmtDate(g.date)}</span>
+              ))}
+            </div>
+          )}
+          {project.criticalPath && (
+            <div style={{ border: "1px solid #000", padding: 10, marginBottom: 14, fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Critical path</div>
+              {project.criticalPath}
+            </div>
+          )}
+
           {tlView === "table" ? (
             <TaskTable rows={project.tasks} onUpdate={(tasks) => patch({ tasks })} isAdmin={isAdmin} />
           ) : (
@@ -1257,6 +1438,8 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
               <MonthCalendar
                 tasks={project.tasks}
                 deliverables={project.deliverables}
+                phases={phases}
+                gates={gates}
                 order={project.timelineOrder || []}
                 onReorder={(order) => patch({ timelineOrder: order })}
               />
