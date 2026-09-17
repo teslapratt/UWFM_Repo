@@ -28,8 +28,6 @@ const emptyProject = (name, member) => ({
   deliverables: [],
   validations: [],
   orders: [],
-  bom: [],
-  notes: "",
   info: { description: "", mdsUrl: "", debriefUrl: "", links: [] },
 });
 
@@ -595,80 +593,6 @@ function OrderTable({ rows, onUpdate, isAdmin }) {
   );
 }
 
-function BOMTable({ rows, onUpdate }) {
-  const [draft, setDraft] = useState({ pn: "", desc: "", qty: "", unitCost: "", source: "" });
-  const add = () => {
-    if (!draft.pn.trim() && !draft.desc.trim()) return;
-    onUpdate([...rows, { id: uid(), ...draft }]);
-    setDraft({ pn: "", desc: "", qty: "", unitCost: "", source: "" });
-  };
-  const totalCost = rows.reduce((s, r) => s + (parseFloat(r.qty) || 0) * (parseFloat(r.unitCost) || 0), 0);
-  return (
-    <div>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th style={{ ...S.th, width: 160 }}>Part number</th>
-            <th style={S.th}>Description</th>
-            <th style={{ ...S.th, width: 55 }}>Qty</th>
-            <th style={{ ...S.th, width: 85 }}>Unit cost</th>
-            <th style={{ ...S.th, width: 90 }}>Ext. cost</th>
-            <th style={{ ...S.th, width: 130 }}>Source / vendor</th>
-            <th style={{ ...S.th, width: 30 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const ext = (parseFloat(r.qty) || 0) * (parseFloat(r.unitCost) || 0);
-            return (
-              <tr key={r.id}>
-                <td style={{ ...S.td, ...S.mono, fontSize: 12 }}>{r.pn || "—"}</td>
-                <td style={S.td}>{r.desc}</td>
-                <td style={{ ...S.td, ...S.mono }}>{r.qty || "—"}</td>
-                <td style={{ ...S.td, ...S.mono }}>{r.unitCost ? `$${r.unitCost}` : "—"}</td>
-                <td style={{ ...S.td, ...S.mono }}>{ext ? `$${ext.toFixed(2)}` : "—"}</td>
-                <td style={S.td}>{r.source || "—"}</td>
-                <td style={S.td}>
-                  <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
-                </td>
-              </tr>
-            );
-          })}
-          <tr>
-            <td style={S.td}>
-              <input style={{ ...S.input, ...S.mono, fontSize: 12 }} placeholder="INR-21700-P45B" value={draft.pn} onChange={(e) => setDraft({ ...draft, pn: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
-            </td>
-            <td style={S.td}>
-              <input style={S.input} placeholder="Description" value={draft.desc} onChange={(e) => setDraft({ ...draft, desc: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
-            </td>
-            <td style={S.td}>
-              <input style={{ ...S.input, ...S.mono }} placeholder="#" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
-            </td>
-            <td style={S.td}>
-              <input style={{ ...S.input, ...S.mono }} placeholder="$" value={draft.unitCost} onChange={(e) => setDraft({ ...draft, unitCost: e.target.value })} />
-            </td>
-            <td style={S.td}></td>
-            <td style={S.td}>
-              <input style={S.input} placeholder="Vendor / stock" value={draft.source} onChange={(e) => setDraft({ ...draft, source: e.target.value })} />
-            </td>
-            <td style={S.td}>
-              <button style={S.btnPrimary} onClick={add}>Add</button>
-            </td>
-          </tr>
-        </tbody>
-        <tfoot>
-          <tr>
-            <td style={{ ...S.td, borderTop: "1px solid #000", fontWeight: 700 }} colSpan={4}>
-              Total ({rows.length} line items)
-            </td>
-            <td style={{ ...S.td, ...S.mono, borderTop: "1px solid #000", fontWeight: 700 }}>${totalCost.toFixed(2)}</td>
-            <td style={{ ...S.td, borderTop: "1px solid #000" }} colSpan={2}></td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
-  );
-}
 
 // ─── Gantt bar view of the timeline ─────────────────────────────────────────
 
@@ -1254,7 +1178,6 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
   const [tab, setTab] = useState("info");
   const [tlView, setTlView] = useState("table"); // table | calendar
   const patch = (p) => onChange({ ...project, ...p });
-  const bom = project.bom || [];
   const info = project.info || { description: "", mdsUrl: "", debriefUrl: "", links: [] };
   const gates = project.gates || [];
   const phases = project.phases || [];
@@ -1284,9 +1207,7 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
     ["timeline", `Timeline (${project.tasks.length})`],
     ["deliverables", `Deliverables (${project.deliverables.length})`],
     ["validation", `Validation & rules (${project.validations.length})`],
-    ["bom", `BOM (${bom.length})`],
     ["orders", `Part orders (${project.orders.length})`],
-    ["notes", "Notes"],
   ];
 
   // Members can drag their tabs into whatever order they like; the order is
@@ -1449,17 +1370,8 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
       )}
       {tab === "info" && <InfoTab info={info} onUpdate={(i) => patch({ info: i })} isAdmin={isAdmin} />}
       {tab === "deliverables" && <DeliverableTable rows={project.deliverables} onUpdate={(deliverables) => patch({ deliverables })} isAdmin={isAdmin} />}
-      {tab === "bom" && <BOMTable rows={bom} onUpdate={(b) => patch({ bom: b })} />}
       {tab === "validation" && <ValidationTable rows={project.validations} onUpdate={(validations) => patch({ validations })} />}
       {tab === "orders" && <OrderTable rows={project.orders} onUpdate={(orders) => patch({ orders })} isAdmin={isAdmin} />}
-      {tab === "notes" && (
-        <textarea
-          style={{ ...S.input, minHeight: 220, fontFamily: "inherit", lineHeight: 1.5 }}
-          placeholder="Design decisions, blockers, links, meeting notes…"
-          value={project.notes}
-          onChange={(e) => patch({ notes: e.target.value })}
-        />
-      )}
     </div>
   );
 }
