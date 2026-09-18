@@ -655,8 +655,8 @@ function MonthGridCalendar({ tasks, deliverables, phases = [], gates = [], onUpd
     return i === -1 ? null : PHASE_BANDS[i % PHASE_BANDS.length];
   };
 
-  const rowRefs = useRef([]);
-  const dragRef = useRef(null);
+  const rowRefs = React.useRef([]);
+  const dragRef = React.useRef(null);
 
   const dateFromPoint = (clientX, clientY) => {
     for (let w = 0; w < weeks.length; w++) {
