@@ -10,7 +10,6 @@ const STORE_KEY = "uwfm-etrain-tracker-v1";
 
 const TASK_STATUSES = ["Not Started", "In Progress", "Blocked", "Complete"];
 const VAL_STATUSES = ["Open", "In Test", "Passed", "Failed"];
-const ORDER_STATUSES = ["Requested", "Approved", "Ordered", "Received"];
 const DELIV_STATUSES = ["Open", "Draft", "Submitted", "Accepted"];
 const CATEGORIES = ["Design", "Calcs", "CAD", "Testing", "Manufacturing", "Integration", "Review", "Purchasing"];
 
@@ -27,7 +26,6 @@ const emptyProject = (name, member) => ({
   tasks: [],
   deliverables: [],
   validations: [],
-  orders: [],
   info: { description: "", mdsUrl: "", debriefUrl: "", links: [] },
 });
 
@@ -523,75 +521,6 @@ function DeliverableTable({ rows, onUpdate, isAdmin }) {
   );
 }
 
-function OrderTable({ rows, onUpdate, isAdmin }) {
-  const [draft, setDraft] = useState({ part: "", vendor: "", qty: "", cost: "", link: "" });
-  const add = () => {
-    if (!draft.part.trim()) return;
-    onUpdate([...rows, { id: uid(), ...draft, status: "Requested" }]);
-    setDraft({ part: "", vendor: "", qty: "", cost: "", link: "" });
-  };
-  const set = (id, patch) => onUpdate(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          <th style={S.th}>Part / PN</th>
-          <th style={{ ...S.th, width: 110 }}>Vendor</th>
-          <th style={{ ...S.th, width: 50 }}>Qty</th>
-          <th style={{ ...S.th, width: 80 }}>Est. cost</th>
-          <th style={{ ...S.th, width: 100 }}>Status</th>
-          <th style={{ ...S.th, width: 30 }}></th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.id}>
-            <td style={S.td}>
-              {r.link ? (
-                <a href={r.link} target="_blank" rel="noreferrer" style={{ color: "#000" }}>{r.part}</a>
-              ) : (
-                r.part
-              )}
-            </td>
-            <td style={S.td}>{r.vendor || "—"}</td>
-            <td style={{ ...S.td, ...S.mono }}>{r.qty || "—"}</td>
-            <td style={{ ...S.td, ...S.mono }}>{r.cost ? `$${r.cost}` : "—"}</td>
-            <td style={S.td}>
-              {isAdmin ? (
-                <StatusChip value={r.status} options={ORDER_STATUSES} onChange={(v) => set(r.id, { status: v })} />
-              ) : (
-                <span style={{ fontSize: 11, color: statusColor(r.status), border: `1px solid ${statusColor(r.status)}`, padding: "2px 8px", whiteSpace: "nowrap" }}>{r.status}</span>
-              )}
-            </td>
-            <td style={S.td}>
-              <DelBtn onClick={() => onUpdate(rows.filter((x) => x.id !== r.id))} />
-            </td>
-          </tr>
-        ))}
-        <tr>
-          <td style={S.td}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <input style={S.input} placeholder="Part name / PN" value={draft.part} onChange={(e) => setDraft({ ...draft, part: e.target.value })} onKeyDown={(e) => e.key === "Enter" && add()} />
-              <input style={{ ...S.input, fontSize: 11 }} placeholder="Link (optional)" value={draft.link} onChange={(e) => setDraft({ ...draft, link: e.target.value })} />
-            </div>
-          </td>
-          <td style={S.td}>
-            <input style={S.input} placeholder="Vendor" value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} />
-          </td>
-          <td style={S.td}>
-            <input style={{ ...S.input, ...S.mono }} placeholder="#" value={draft.qty} onChange={(e) => setDraft({ ...draft, qty: e.target.value })} />
-          </td>
-          <td style={S.td}>
-            <input style={{ ...S.input, ...S.mono }} placeholder="$" value={draft.cost} onChange={(e) => setDraft({ ...draft, cost: e.target.value })} />
-          </td>
-          <td style={S.td} colSpan={2}>
-            <button style={S.btnPrimary} onClick={add}>Request</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  );
-}
 
 
 // ─── Gantt bar view of the timeline ─────────────────────────────────────────
@@ -1200,14 +1129,12 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
   const openTasks = project.tasks.filter((t) => t.status !== "Complete").length;
   const overdue = [...project.tasks, ...project.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
   const valOpen = project.validations.filter((v) => !["Passed"].includes(v.status)).length;
-  const pendingOrders = project.orders.filter((o) => o.status === "Requested").length;
 
   const tabs = [
     ["info", "Information"],
     ["timeline", `Timeline (${project.tasks.length})`],
     ["deliverables", `Deliverables (${project.deliverables.length})`],
     ["validation", `Validation & rules (${project.validations.length})`],
-    ["orders", `Part orders (${project.orders.length})`],
   ];
 
   // Members can drag their tabs into whatever order they like; the order is
@@ -1241,7 +1168,7 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
   return (
     <div>
       {/* Title block */}
-      <div style={{ border: "1px solid #000", display: "grid", gridTemplateColumns: "1fr auto auto auto auto", marginBottom: 16 }}>
+      <div style={{ border: "1px solid #000", display: "grid", gridTemplateColumns: "1fr auto auto auto", marginBottom: 16 }}>
         <div style={{ padding: "10px 14px", borderRight: "1px solid #000" }}>
           <div style={{ fontSize: 11, color: "#666" }}>{isAdmin ? "Project" : "Your project"}</div>
           <div style={{ fontSize: 20, fontWeight: 700 }}>{project.name}</div>
@@ -1251,7 +1178,6 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
           ["Open tasks", openTasks, "#000"],
           ["Overdue", overdue, overdue ? "#c11414" : "#000"],
           ["Validation open", valOpen, "#000"],
-          ["Orders pending", pendingOrders, pendingOrders ? ACCENT : "#000"],
         ].map(([label, n, color]) => (
           <div key={label} style={{ padding: "10px 14px", borderRight: "1px solid #000", textAlign: "right", minWidth: 90 }}>
             <div style={{ fontSize: 11, color: "#666" }}>{label}</div>
@@ -1371,7 +1297,6 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
       {tab === "info" && <InfoTab info={info} onUpdate={(i) => patch({ info: i })} isAdmin={isAdmin} />}
       {tab === "deliverables" && <DeliverableTable rows={project.deliverables} onUpdate={(deliverables) => patch({ deliverables })} isAdmin={isAdmin} />}
       {tab === "validation" && <ValidationTable rows={project.validations} onUpdate={(validations) => patch({ validations })} />}
-      {tab === "orders" && <OrderTable rows={project.orders} onUpdate={(orders) => patch({ orders })} isAdmin={isAdmin} />}
     </div>
   );
 }
@@ -1682,7 +1607,6 @@ function AdminHome({ store, setStore, openProject }) {
             <th style={{ ...S.th, width: 110 }}>Access code</th>
             <th style={{ ...S.th, width: 90 }}>Tasks open</th>
             <th style={{ ...S.th, width: 80 }}>Overdue</th>
-            <th style={{ ...S.th, width: 90 }}>Orders req.</th>
             <th style={{ ...S.th, width: 200 }}></th>
           </tr>
         </thead>
@@ -1690,7 +1614,6 @@ function AdminHome({ store, setStore, openProject }) {
           {store.projects.map((p) => {
             const open = p.tasks.filter((t) => t.status !== "Complete").length;
             const od = [...p.tasks, ...p.deliverables].filter((t) => isOverdue(t.due, t.status)).length;
-            const req = p.orders.filter((o) => o.status === "Requested").length;
             return (
               <tr
                 key={p.id}
@@ -1725,7 +1648,6 @@ function AdminHome({ store, setStore, openProject }) {
                 )}
                 <td style={{ ...S.td, ...S.mono }}>{open}</td>
                 <td style={{ ...S.td, ...S.mono, color: od ? "#c11414" : undefined, fontWeight: od ? 700 : 400 }}>{od}</td>
-                <td style={{ ...S.td, ...S.mono, color: req ? ACCENT : undefined, fontWeight: req ? 700 : 400 }}>{req}</td>
                 <td style={S.td}>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {editingId === p.id ? (
@@ -1756,7 +1678,7 @@ function AdminHome({ store, setStore, openProject }) {
           })}
           {store.projects.length === 0 && (
             <tr>
-              <td style={{ ...S.td, color: "#666" }} colSpan={8}>
+              <td style={{ ...S.td, color: "#666" }} colSpan={7}>
                 No projects yet. Create the first one below — e.g. "LV Battery", "Accumulator", "Inverters".
               </td>
             </tr>
