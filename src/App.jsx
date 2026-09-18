@@ -602,220 +602,227 @@ function parseTimelineOutline(text, refYear) {
 }
 
 const PHASE_BANDS = ["#f3f0fa", "#eef6f4", "#fdf4ea", "#eef2fb"];
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDaysISO = (iso, n) => {
+  const d = toDate(iso);
+  d.setDate(d.getDate() + n);
+  return isoOf(d);
+};
 
-function MonthCalendar({ tasks, deliverables, phases = [], gates = [], order = [], onReorder }) {
-  const DAY_W = 28;
-  const NAME_W = 240;
-  const ROW_H = 44;
+// Assigns each item overlapping this week a non-overlapping vertical "lane"
+// (Google Calendar-style stacking for multi-day bars sharing a week row).
+function computeWeekSegments(weekDays, items) {
+  const weekStart = weekDays[0], weekEnd = weekDays[6];
+  const overlapping = items.filter((it) => toDate(it.due) >= weekStart && toDate(it.start) <= weekEnd);
+  overlapping.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : (toDate(b.due) - toDate(b.start)) - (toDate(a.due) - toDate(a.start))));
+  const laneEnds = [];
+  const segments = overlapping.map((it) => {
+    const startCol = Math.max(0, Math.round((toDate(it.start) - weekStart) / DAY_MS));
+    const endCol = Math.min(6, Math.round((toDate(it.due) - weekStart) / DAY_MS));
+    let lane = laneEnds.findIndex((endC) => endC < startCol);
+    if (lane === -1) { lane = laneEnds.length; laneEnds.push(endCol); }
+    else laneEnds[lane] = endCol;
+    return { item: it, startCol, endCol, lane, continuesLeft: toDate(it.start) < weekStart, continuesRight: toDate(it.due) > weekEnd };
+  });
+  return { segments, laneCount: laneEnds.length };
+}
+
+// Google-Calendar-style month grid: tasks render as draggable multi-day bars
+// (drag the middle to move, the edges to extend/shrink start or due), and
+// deliverables as single-day chips. Gates show as a flag on their date, and
+// days inside a phase's range get a light tint matching the old Gantt bands.
+function MonthGridCalendar({ tasks, deliverables, phases = [], gates = [], onUpdateTasks, onUpdateDeliverables }) {
+  const [viewMonth, setViewMonth] = useState(() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d; });
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const rawItems = [
-    ...tasks.map((t) => ({ ...t, kind: "task", from: t.start || t.due, to: t.due || t.start })),
-    ...deliverables.map((d) => ({ ...d, kind: "deliv", from: d.due, to: d.due })),
-  ].filter((i) => i.from);
+  const gridStart = new Date(viewMonth);
+  gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+  const weeks = Array.from({ length: 6 }, (_, w) =>
+    Array.from({ length: 7 }, (_, d) => { const day = new Date(gridStart); day.setDate(gridStart.getDate() + w * 7 + d); return day; })
+  );
 
-  if (rawItems.length === 0)
-    return <div style={{ padding: 30, color: "#666", fontSize: 13, border: "1px solid #ddd" }}>No dated tasks or deliverables yet — add dates in the table view and they'll appear here.</div>;
+  const items = [
+    ...tasks.filter((t) => t.start || t.due).map((t) => ({ id: t.id, kind: "task", name: t.name, status: t.status, start: t.start || t.due, due: t.due || t.start })),
+    ...deliverables.filter((d) => d.due).map((d) => ({ id: d.id, kind: "deliv", name: d.name, status: d.status, start: d.due, due: d.due })),
+  ];
 
-  // Manual drag order (sidebar) wins; anything not yet ordered falls back to date order at the end.
-  const byId = new Map(rawItems.map((i) => [i.id, i]));
-  const dateSorted = [...rawItems].sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : (a.to || a.from) < (b.to || b.from) ? -1 : 1));
-  const orderedIds = order.filter((id) => byId.has(id));
-  const missing = dateSorted.filter((i) => !orderedIds.includes(i.id));
-  const items = [...orderedIds.map((id) => byId.get(id)), ...missing];
-
-  const dragId = React.useRef(null);
-  const reorderRows = (targetId) => {
-    if (!dragId.current || dragId.current === targetId || !onReorder) return;
-    const ids = items.map((i) => i.id).filter((id) => id !== dragId.current);
-    ids.splice(ids.indexOf(targetId), 0, dragId.current);
-    onReorder(ids);
+  const gatesByDay = {};
+  gates.forEach((g) => { (gatesByDay[g.date] = gatesByDay[g.date] || []).push(g); });
+  const phaseAt = (day) => {
+    const i = phases.findIndex((p) => day >= toDate(p.from) && day <= toDate(p.to));
+    return i === -1 ? null : PHASE_BANDS[i % PHASE_BANDS.length];
   };
 
-  // Range: min start → max due, padded 3 days each side, always including today.
-  let min = toDate(items[0].from);
-  let max = toDate(items[0].to || items[0].from);
-  items.forEach((i) => {
-    const f = toDate(i.from), t = toDate(i.to || i.from);
-    if (f < min) min = f;
-    if (t > max) max = t;
-  });
-  phases.forEach((p) => {
-    const f = toDate(p.from), t = toDate(p.to);
-    if (f < min) min = f;
-    if (t > max) max = t;
-  });
-  gates.forEach((g) => {
-    const d = toDate(g.date);
-    if (d < min) min = d;
-    if (d > max) max = d;
-  });
-  if (today < min) min = today;
-  if (today > max) max = today;
-  min = new Date(min.getTime() - 3 * DAY_MS);
-  max = new Date(max.getTime() + 3 * DAY_MS);
-  const nDays = Math.round((max - min) / DAY_MS) + 1;
+  const rowRefs = useRef([]);
+  const dragRef = useRef(null);
 
-  const dayX = (d) => Math.round((toDate(typeof d === "string" ? d : dkeyStr(d)) - min) / DAY_MS) * DAY_W;
-  const dkeyStr = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const todayX = Math.round((today - min) / DAY_MS) * DAY_W;
+  const dateFromPoint = (clientX, clientY) => {
+    for (let w = 0; w < weeks.length; w++) {
+      const el = rowRefs.current[w];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) {
+        const col = Math.max(0, Math.min(6, Math.floor((clientX - r.left) / (r.width / 7))));
+        return weeks[w][col];
+      }
+    }
+    const firstR = rowRefs.current[0]?.getBoundingClientRect();
+    const lastR = rowRefs.current[5]?.getBoundingClientRect();
+    if (firstR && clientY < firstR.top) return weeks[0][0];
+    if (lastR && clientY > lastR.bottom) return weeks[5][6];
+    return null;
+  };
 
-  // Month header segments
-  const months = [];
-  for (let i = 0; i < nDays; i++) {
-    const d = new Date(min.getTime() + i * DAY_MS);
-    const label = d.toLocaleString("default", { month: "short", year: "2-digit" });
-    if (!months.length || months[months.length - 1].label !== label) months.push({ label, start: i, count: 1 });
-    else months[months.length - 1].count++;
-  }
+  const commitDates = (item, newStart, newDue) => {
+    if (item.kind === "task") onUpdateTasks(tasks.map((t) => (t.id === item.id ? { ...t, start: newStart, due: newDue } : t)));
+    else onUpdateDeliverables(deliverables.map((d) => (d.id === item.id ? { ...d, due: newDue } : d)));
+  };
 
-  const chartW = nDays * DAY_W;
+  const startDrag = (e, item, mode) => {
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    const anchor = dateFromPoint(e.clientX, e.clientY);
+    if (!anchor) return;
+    const anchorKey = isoOf(anchor);
+    dragRef.current = { item, mode, anchorKey, lastKey: anchorKey, origStart: item.start, origDue: item.due };
+  };
+  const onDragMove = (e) => {
+    const d = dragRef.current; if (!d) return;
+    const cur = dateFromPoint(e.clientX, e.clientY);
+    if (!cur) return;
+    const curKey = isoOf(cur);
+    if (curKey === d.lastKey) return;
+    d.lastKey = curKey;
+    const deltaDays = Math.round((toDate(curKey) - toDate(d.anchorKey)) / DAY_MS);
+    let newStart = d.origStart, newDue = d.origDue;
+    if (d.mode === "move") {
+      newStart = addDaysISO(d.origStart, deltaDays);
+      newDue = addDaysISO(d.origDue, deltaDays);
+    } else if (d.mode === "resize-start") {
+      newStart = addDaysISO(d.origStart, deltaDays);
+      if (newStart > newDue) newStart = newDue;
+    } else if (d.mode === "resize-end") {
+      newDue = addDaysISO(d.origDue, deltaDays);
+      if (newDue < newStart) newDue = newStart;
+    }
+    commitDates(d.item, newStart, newDue);
+  };
+  const endDrag = () => { dragRef.current = null; };
 
   return (
     <div style={{ border: "1px solid #000" }}>
-      <div style={{ overflowX: "auto" }}>
-      <div style={{ display: "flex", minWidth: NAME_W + chartW }}>
-        {/* Fixed name column */}
-        <div style={{ width: NAME_W, flexShrink: 0, borderRight: "1px solid #000", position: "sticky", left: 0, background: "#fff", zIndex: 2 }}>
-          <div style={{ height: 46, borderBottom: "1px solid #000", display: "flex", alignItems: "flex-end", padding: "4px 12px", fontSize: 13, fontWeight: 700 }}>
-            Task / deliverable
-          </div>
-          {items.map((it) => (
-            <div
-              key={it.id}
-              draggable={!!onReorder}
-              onDragStart={() => { dragId.current = it.id; }}
-              onDragOver={(e) => { e.preventDefault(); reorderRows(it.id); }}
-              onDragEnd={() => { dragId.current = null; }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#f7f7f7")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
-              style={{ height: ROW_H, borderBottom: "1px solid #eee", display: "flex", alignItems: "center", gap: 8, padding: "0 12px", fontSize: 13, cursor: onReorder ? "grab" : "default", background: "#fff" }}
-            >
-              {onReorder && <span style={{ color: "#bbb", fontSize: 13, flexShrink: 0 }} title="Drag to reorder">⠿</span>}
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.kind === "deliv" ? "◆ " : ""}{it.name}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Chart area */}
-        <div style={{ position: "relative", width: chartW }}>
-          {/* Phase row */}
-          {phases.length > 0 && (
-            <div style={{ display: "flex", height: 20, borderBottom: "1px solid #ddd", position: "relative" }}>
-              {phases.map((p, i) => {
-                const x = dayX(p.from);
-                const w = (Math.round((toDate(p.to) - toDate(p.from)) / DAY_MS) + 1) * DAY_W;
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: "1px solid #000" }}>
+        <button style={S.btn} onClick={() => setViewMonth((d) => { const n = new Date(d); n.setMonth(n.getMonth() - 1); return n; })}>‹</button>
+        <button style={S.btn} onClick={() => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); setViewMonth(d); }}>Today</button>
+        <button style={S.btn} onClick={() => setViewMonth((d) => { const n = new Date(d); n.setMonth(n.getMonth() + 1); return n; })}>›</button>
+        <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 6 }}>{viewMonth.toLocaleString("default", { month: "long", year: "numeric" })}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: "1px solid #000" }}>
+        {WEEKDAY_LABELS.map((l) => (
+          <div key={l} style={{ padding: "4px 6px", fontSize: 11, fontWeight: 700, color: "#666", textAlign: "center" }}>{l}</div>
+        ))}
+      </div>
+      {weeks.map((weekDays, w) => {
+        const { segments, laneCount } = computeWeekSegments(weekDays, items);
+        const LANE_H = 20, DAYNUM_H = 22;
+        return (
+          <div
+            key={w}
+            ref={(el) => (rowRefs.current[w] = el)}
+            onPointerMove={onDragMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            style={{ position: "relative", display: "grid", gridTemplateColumns: "repeat(7, 1fr)", borderBottom: "1px solid #ddd" }}
+          >
+            {weekDays.map((day, i) => {
+              const inMonth = day.getMonth() === viewMonth.getMonth();
+              const isToday = isoOf(day) === isoOf(today);
+              const dayGates = gatesByDay[isoOf(day)] || [];
+              return (
+                <div
+                  key={i}
+                  style={{
+                    borderRight: i < 6 ? "1px solid #eee" : "none",
+                    padding: "3px 4px",
+                    minHeight: DAYNUM_H + Math.max(laneCount, 1) * LANE_H + 6,
+                    background: phaseAt(day) || (inMonth ? "#fff" : "#fafafa"),
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span
+                      style={{
+                        fontSize: 11, ...S.mono, color: inMonth ? "#000" : "#bbb",
+                        ...(isToday ? { background: ACCENT, color: "#fff", borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700 } : {}),
+                      }}
+                    >
+                      {day.getDate()}
+                    </span>
+                    {dayGates.map((g) => (
+                      <span key={g.id} title={g.name} style={{ fontSize: 10, color: "#c17d0a", fontWeight: 700 }}>🚩</span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ position: "absolute", left: 0, right: 0, top: DAYNUM_H, pointerEvents: "none" }}>
+              {segments.map((seg) => {
+                const it = seg.item;
+                const c = statusColor(it.status);
+                const late = isOverdue(it.due, it.status);
+                const tip = `${it.name} — ${it.status}\n${fmtDate(it.start)}${it.due !== it.start ? " → " + fmtDate(it.due) : ""}${late ? "  (OVERDUE)" : ""}`;
                 return (
                   <div
-                    key={p.id}
-                    title={p.description}
-                    style={{ position: "absolute", left: x, width: w, top: 0, bottom: 0, background: PHASE_BANDS[i % PHASE_BANDS.length], borderRight: "1px solid #ddd", fontSize: 10, fontWeight: 700, padding: "3px 4px", whiteSpace: "nowrap", overflow: "hidden" }}
+                    key={it.id + ":" + w}
+                    title={tip}
+                    onPointerDown={(e) => startDrag(e, it, "move")}
+                    style={{
+                      position: "absolute",
+                      left: `${(seg.startCol / 7) * 100}%`,
+                      width: `${((seg.endCol - seg.startCol + 1) / 7) * 100}%`,
+                      top: seg.lane * LANE_H,
+                      height: LANE_H - 3,
+                      background: c,
+                      border: late ? "2px solid #c11414" : "none",
+                      borderRadius: it.kind === "deliv" ? 8 : 3,
+                      boxSizing: "border-box",
+                      display: "flex",
+                      alignItems: "center",
+                      cursor: "grab",
+                      pointerEvents: "auto",
+                      overflow: "hidden",
+                    }}
                   >
-                    {p.name}
+                    {it.kind === "task" && !seg.continuesLeft && (
+                      <div
+                        onPointerDown={(e) => startDrag(e, it, "resize-start")}
+                        style={{ width: 6, alignSelf: "stretch", cursor: "ew-resize", flexShrink: 0 }}
+                      />
+                    )}
+                    <span style={{ color: "#fff", fontSize: 10, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "0 4px", flex: 1 }}>
+                      {it.kind === "deliv" ? "◆ " : ""}{it.name}
+                    </span>
+                    {it.kind === "task" && !seg.continuesRight && (
+                      <div
+                        onPointerDown={(e) => startDrag(e, it, "resize-end")}
+                        style={{ width: 6, alignSelf: "stretch", cursor: "ew-resize", flexShrink: 0 }}
+                      />
+                    )}
                   </div>
                 );
               })}
             </div>
-          )}
-          {/* Month row */}
-          <div style={{ display: "flex", height: 22, borderBottom: "1px solid #ddd" }}>
-            {months.map((m, i) => (
-              <div key={i} style={{ width: m.count * DAY_W, fontSize: 12, fontWeight: 700, padding: "3px 4px", borderRight: "1px solid #ddd", whiteSpace: "nowrap", overflow: "hidden" }}>
-                {m.label}
-              </div>
-            ))}
           </div>
-          {/* Day row */}
-          <div style={{ display: "flex", height: 24, borderBottom: "1px solid #000" }}>
-            {Array.from({ length: nDays }, (_, i) => {
-              const d = new Date(min.getTime() + i * DAY_MS);
-              const wknd = d.getDay() === 0 || d.getDay() === 6;
-              return (
-                <div key={i} style={{ width: DAY_W, fontSize: 10, textAlign: "center", paddingTop: 6, color: wknd ? "#bbb" : "#666", background: wknd ? "#fafafa" : "#fff", ...S.mono }}>
-                  {d.getDate()}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Grid + weekend shading behind bars */}
-          <div style={{ position: "relative", height: items.length * ROW_H }}>
-            {/* Phase background bands */}
-            {phases.map((p, i) => {
-              const x = dayX(p.from);
-              const w = (Math.round((toDate(p.to) - toDate(p.from)) / DAY_MS) + 1) * DAY_W;
-              return <div key={p.id} style={{ position: "absolute", left: x, width: w, top: 0, bottom: 0, background: PHASE_BANDS[i % PHASE_BANDS.length], opacity: 0.5 }} />;
-            })}
-            {Array.from({ length: nDays }, (_, i) => {
-              const d = new Date(min.getTime() + i * DAY_MS);
-              const wknd = d.getDay() === 0 || d.getDay() === 6;
-              return (
-                <div key={i} style={{ position: "absolute", left: i * DAY_W, top: 0, bottom: 0, width: DAY_W, background: wknd ? "rgba(0,0,0,0.04)" : "none", borderRight: "1px solid #f0f0f0" }} />
-              );
-            })}
-            {/* Row separators */}
-            {items.map((_, r) => (
-              <div key={r} style={{ position: "absolute", left: 0, right: 0, top: (r + 1) * ROW_H, borderTop: "1px solid #eee" }} />
-            ))}
-            {/* Today line */}
-            {todayX >= 0 && todayX <= chartW && (
-              <div style={{ position: "absolute", left: todayX + DAY_W / 2, top: phases.length ? -66 : -46, bottom: 0, width: 0, borderLeft: `2px solid ${ACCENT}`, zIndex: 1 }} />
-            )}
-            {/* Gates */}
-            {gates.map((g) => {
-              const gx = dayX(g.date) + DAY_W / 2;
-              if (gx < 0 || gx > chartW) return null;
-              return (
-                <div key={g.id} style={{ position: "absolute", left: gx, top: phases.length ? -66 : -46, bottom: 0, width: 0, borderLeft: "2px dashed #c17d0a", zIndex: 1 }}>
-                  <div style={{ position: "absolute", top: -14, left: 4, fontSize: 10, fontWeight: 700, color: "#c17d0a", whiteSpace: "nowrap" }}>{g.name}</div>
-                </div>
-              );
-            })}
-            {/* Bars */}
-            {items.map((it, r) => {
-              const c = statusColor(it.status);
-              const x = dayX(it.from);
-              const w = (Math.round((toDate(it.to || it.from) - toDate(it.from)) / DAY_MS) + 1) * DAY_W;
-              const late = isOverdue(it.to || it.from, it.status);
-              const tip = `${it.name} — ${it.status}\n${fmtDate(it.from)}${it.to !== it.from ? " → " + fmtDate(it.to) : ""}${late ? "  (OVERDUE)" : ""}`;
-              if (it.kind === "deliv")
-                return (
-                  <div key={it.id} title={tip} style={{ position: "absolute", left: x + DAY_W / 2 - 8, top: r * ROW_H + ROW_H / 2 - 8, width: 16, height: 16, background: c, transform: "rotate(45deg)", border: late ? "2px solid #c11414" : "none", borderRadius: 2, boxShadow: "0 1px 2px rgba(0,0,0,0.25)", cursor: "default" }} />
-                );
-              return (
-                <div
-                  key={it.id}
-                  title={tip}
-                  style={{
-                    position: "absolute",
-                    left: x,
-                    top: r * ROW_H + 8,
-                    width: Math.max(w, DAY_W) - 2,
-                    height: ROW_H - 16,
-                    background: c,
-                    border: late ? "2px solid #c11414" : "none",
-                    borderRadius: 3,
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-                    boxSizing: "border-box",
-                    cursor: "default",
-                    overflow: "hidden",
-                  }}
-                >
-                  <span style={{ color: "#fff", fontSize: 11, fontWeight: 600, lineHeight: `${ROW_H - 16}px`, padding: "0 6px", whiteSpace: "nowrap" }}>{it.name}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-      </div>
+        );
+      })}
       <div style={{ borderTop: "1px solid #000", padding: "8px 12px", fontSize: 11, color: "#666", display: "flex", gap: 16, flexWrap: "wrap" }}>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#666", borderRadius: 2 }} /> Not started</span>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: ACCENT, borderRadius: 2 }} /> In progress</span>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#0a7a2f", borderRadius: 2 }} /> Complete</span>
         <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#c11414", borderRadius: 2 }} /> Blocked</span>
-        <span>◆ deliverable · red outline = overdue · purple line = today{gates.length ? " · orange dashed = gate" : ""}{onReorder ? " · drag ⠿ to reorder" : ""}</span>
+        <span>◆ deliverable · drag a bar's middle to move, its edges to extend/shrink{gates.length ? " · 🚩 gate" : ""}</span>
       </div>
     </div>
   );
@@ -1217,7 +1224,7 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
             <div style={{ display: "inline-flex", border: "1px solid #000" }}>
-              {[["table", "Table"], ["calendar", "Bar view"]].map(([id, label]) => (
+              {[["table", "Table"], ["calendar", "Calendar"]].map(([id, label]) => (
                 <button
                   key={id}
                   onClick={() => setTlView(id)}
@@ -1282,13 +1289,13 @@ function ProjectView({ project, onChange, onBack, isAdmin }) {
             <TaskTable rows={project.tasks} onUpdate={(tasks) => patch({ tasks })} isAdmin={isAdmin} />
           ) : (
             <div style={{ position: "relative", left: "50%", right: "50%", width: "100vw", marginLeft: "-50vw", marginRight: "-50vw", padding: "0 20px" }}>
-              <MonthCalendar
+              <MonthGridCalendar
                 tasks={project.tasks}
                 deliverables={project.deliverables}
                 phases={phases}
                 gates={gates}
-                order={project.timelineOrder || []}
-                onReorder={(order) => patch({ timelineOrder: order })}
+                onUpdateTasks={(tasks) => patch({ tasks })}
+                onUpdateDeliverables={(deliverables) => patch({ deliverables })}
               />
             </div>
           )}
