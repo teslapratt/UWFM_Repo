@@ -1883,7 +1883,7 @@ export default function App() {
       />
     );
   } else if (page === "packaging") {
-    body = <T38Packaging />;
+    body = <T38Packaging isAdmin={session.role === "admin"} />;
   } else if (session.role === "member") {
     body = memberProject ? (
       <ProjectView project={memberProject} onChange={updateProject} isAdmin={false} />

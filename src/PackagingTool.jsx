@@ -85,11 +85,11 @@ const mkComp = (n, over = {}) => ({
 const STORE_KEY = "t38-packaging-v1";
 const MOCKUPS_KEY = "t38-packaging-mockups-v1";
 
-function Num({ value, onChange, step = 1, w = 66 }) {
+function Num({ value, onChange, step = 1, w = 66, disabled }) {
   const [txt, setTxt] = useState(null);
   return (
     <input
-      className="num" style={{ width: w }} type="number" step={step}
+      className="num" style={{ width: w }} type="number" step={step} disabled={disabled}
       value={txt !== null ? txt : Math.round(value * 100) / 100}
       onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
       onBlur={() => setTxt(null)}
@@ -100,18 +100,18 @@ function Num({ value, onChange, step = 1, w = 66 }) {
 // Module-level (not defined inside T38Packaging's render) so React keeps the
 // same component identity across re-renders instead of remounting the input
 // and kicking focus out on every keystroke.
-function F({ sel, upd, label, k, step = 1, w }) {
+function F({ sel, upd, label, k, step = 1, w, disabled }) {
   return (
-    <label className="fld"><span>{label}</span><Num value={sel[k]} step={step} w={w} onChange={(v) => upd(sel.id, { [k]: v })} /></label>
+    <label className="fld"><span>{label}</span><Num value={sel[k]} step={step} w={w} disabled={disabled} onChange={(v) => upd(sel.id, { [k]: v })} /></label>
   );
 }
-function RotRow({ sel, upd, rotate, rotStep, axis, name }) {
+function RotRow({ sel, upd, rotate, rotStep, axis, name, disabled }) {
   return (
     <div className="rotrow">
       <span className="rlbl">{name}</span>
-      <button className="rb" onClick={() => rotate(sel.id, axis, -rotStep)}>⟲</button>
-      <Num value={sel[axis]} step={rotStep} w={58} onChange={(v) => upd(sel.id, { [axis]: v })} />
-      <button className="rb" onClick={() => rotate(sel.id, axis, rotStep)}>⟳</button>
+      <button className="rb" disabled={disabled} onClick={() => rotate(sel.id, axis, -rotStep)}>⟲</button>
+      <Num value={sel[axis]} step={rotStep} w={58} disabled={disabled} onChange={(v) => upd(sel.id, { [axis]: v })} />
+      <button className="rb" disabled={disabled} onClick={() => rotate(sel.id, axis, rotStep)}>⟳</button>
     </div>
   );
 }
@@ -131,7 +131,7 @@ function MockupThumb({ comps }) {
   );
 }
 
-function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, winRect, drawing, onDrawWindow }) {
+function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, winRect, drawing, onDrawWindow, isAdmin }) {
   const V = VIEWS[vk];
   const wrapRef = useRef(null);
   const [vb, setVb] = useState(V.fit);
@@ -154,10 +154,18 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
   const down = (e, comp) => {
     e.stopPropagation();
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    if (drawing) {
+    if (drawing && isAdmin) {
       const [u0, v0] = toMM(e);
       dragRef.current = { kind: "drawwin", u0, v0 };
       setDrawRect({ u0, v0, u1: u0, v1: v0 });
+      return;
+    }
+    if (!isAdmin) {
+      // Members can select (to view stats) and pan the background, but
+      // can't move/rotate components or the firewall.
+      if (comp && comp !== "fw") onSelect(comp.id);
+      else if (!comp) onSelect(null);
+      dragRef.current = comp ? null : { kind: "pan", u0: e.clientX, v0: e.clientY, vb0: [...vb] };
       return;
     }
     const [u0, v0] = toMM(e);
@@ -212,7 +220,7 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
 
   const sel = comps.find((c) => c.id === selId);
   let rotUI = null;
-  if (sel) {
+  if (sel && isAdmin) {
     const R = rotMat(sel.rx, sel.ry, sel.rz);
     const pts = boxCorners(sel.L + 2 * sel.cL, sel.W + 2 * sel.cW, sel.H + 2 * sel.cH, R, sel).map(V.proj);
     const liveTop = Math.min(...pts.map((p) => p[1]));
@@ -305,8 +313,8 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
                   <line className="fwhit" x1={-fw.x} y1={-zb} x2={-(fw.x + du)} y2={-zt} />
                   <text x={-(fw.x + du)} y={-zt - 8 / scale} fontSize={11 / scale}>{lbl}</text>
                 </g>
-                {tbtn(-gap, "⟲")}
-                {tbtn(gap, "⟳")}
+                {isAdmin && tbtn(-gap, "⟲")}
+                {isAdmin && tbtn(gap, "⟳")}
               </g>
             );
           }
@@ -324,7 +332,7 @@ function View({ vk, comps, selId, onSelect, onDrag, onRotate, fw, setFw, solid, 
   );
 }
 
-export default function T38Packaging() {
+export default function T38Packaging({ isAdmin }) {
   const [comps, setComps] = useState(null);
   const [fw, setFw] = useState({ x: -131, tilt: 0, show: true });
   const [selId, setSelId] = useState(null);
@@ -358,6 +366,7 @@ export default function T38Packaging() {
   const onResizeUp = () => { resizeRef.current = null; };
 
   const commitWindow = (which, bounds) => {
+    if (!isAdmin) return;
     setWindows((w) => ({ ...w, [which]: bounds }));
     setDrawMode(null);
   };
@@ -416,6 +425,7 @@ export default function T38Packaging() {
 
   useEffect(() => {
     const onKey = (e) => {
+      if (!isAdmin) return;
       if (["INPUT", "TEXTAREA"].includes(e.target.tagName)) return;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "z") {
@@ -447,13 +457,14 @@ export default function T38Packaging() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [comps, fw, selId]);
+  }, [comps, fw, selId, isAdmin]);
 
   const persistMockups = async (list) => {
     setMockups(list);
     try { await window.storage.set(MOCKUPS_KEY, JSON.stringify(list)); } catch (_) {}
   };
   const saveMockup = () => {
+    if (!isAdmin) return;
     const name = mockupName.trim();
     if (!name) return;
     const snap = { id: "m" + Date.now().toString(36), name, savedAt: new Date().toISOString(), comps, uid, fw };
@@ -461,6 +472,7 @@ export default function T38Packaging() {
     setMockupName("");
   };
   const loadMockup = (m) => {
+    if (!isAdmin) return;
     if (!window.confirm(`Load "${m.name}"? This replaces the current layout (still saved under Mockups).`)) return;
     uid = m.uid || uid;
     setComps(m.comps);
@@ -468,41 +480,45 @@ export default function T38Packaging() {
     setSelId(null);
   };
   const duplicateMockup = (m) => {
+    if (!isAdmin) return;
     persistMockups([...mockups, { ...m, id: "m" + Date.now().toString(36), name: m.name + " copy", savedAt: new Date().toISOString() }]);
   };
-  const renameMockup = (id, name) => persistMockups(mockups.map((m) => (m.id === id ? { ...m, name } : m)));
+  const renameMockup = (id, name) => { if (isAdmin) persistMockups(mockups.map((m) => (m.id === id ? { ...m, name } : m))); };
   const deleteMockup = (id) => {
+    if (!isAdmin) return;
     if (!window.confirm("Delete this mockup?")) return;
     persistMockups(mockups.filter((m) => m.id !== id));
   };
 
   if (!comps) return <div className="loading">Loading layout…</div>;
 
-  const upd = (id, patch) => setComps((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  const rotate = (id, axis, d) => setComps((cs) => cs.map((c) => (c.id === id ? { ...c, [axis]: ((c[axis] + d) % 360 + 360) % 360 } : c)));
+  const upd = (id, patch) => { if (isAdmin) setComps((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c))); };
+  const rotate = (id, axis, d) => { if (isAdmin) setComps((cs) => cs.map((c) => (c.id === id ? { ...c, [axis]: ((c[axis] + d) % 360 + 360) % 360 } : c))); };
   const sel = comps.find((c) => c.id === selId);
 
-  const toggleMultiSel = (id) =>
+  const toggleMultiSel = (id) => {
+    if (!isAdmin) return;
     setMultiSel((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  };
   const groupSelected = () => {
-    if (multiSel.size < 2) return;
+    if (!isAdmin || multiSel.size < 2) return;
     const gid = "g" + Date.now().toString(36);
     setComps((cs) => cs.map((c) => (multiSel.has(c.id) ? { ...c, groupId: gid } : c)));
     setMultiSel(new Set());
   };
   const ungroupSelected = () => {
-    if (!sel?.groupId) return;
+    if (!isAdmin || !sel?.groupId) return;
     const gid = sel.groupId;
     setComps((cs) => cs.map((c) => (c.groupId === gid ? { ...c, groupId: null } : c)));
   };
 
   const reorderComps = (targetId) => {
-    if (!dragCompId.current || dragCompId.current === targetId) return;
+    if (!isAdmin || !dragCompId.current || dragCompId.current === targetId) return;
     setComps((cs) => {
       const ids = cs.map((c) => c.id).filter((id) => id !== dragCompId.current);
       ids.splice(ids.indexOf(targetId), 0, dragCompId.current);
@@ -515,32 +531,33 @@ export default function T38Packaging() {
       <style>{CSS}</style>
       <aside className="panel">
         <div className="brand">T38 packaging<span>monocoque 2279.87 × 690.04 × 525.00 mm · exact STEP geometry · nose x=−1693.8 · cockpit −979…−322 · rear bulkhead x=+586.1 (face z 119.4–509.7, h 390.3) · y ±345.0 · z 30…555</span></div>
+        {!isAdmin && <div className="hint" style={{ padding: "8px 12px", borderBottom: "1px solid #e3e3e3" }}>View only — ask your lead to make changes here.</div>}
         <div className="row">
-          <button className="btn primary" onClick={() => { const c = mkComp("Component " + comps.length); setComps((cs) => [...cs, c]); setSelId(c.id); }}>Add component</button>
-          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++, name: sel.name + " copy", x: sel.x + 50, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Duplicate</button>
-          <button className="btn" disabled={!sel} onClick={() => { const c = { ...sel, id: "c" + uid++ , name: sel.name + " copy", y: -sel.y, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Mirror ↔</button>
-          <button className="btn danger" disabled={!sel} onClick={() => { setComps((cs) => cs.filter((c) => c.id !== sel.id)); setSelId(null); }}>Delete</button>
+          <button className="btn primary" disabled={!isAdmin} onClick={() => { const c = mkComp("Component " + comps.length); setComps((cs) => [...cs, c]); setSelId(c.id); }}>Add component</button>
+          <button className="btn" disabled={!isAdmin || !sel} onClick={() => { const c = { ...sel, id: "c" + uid++, name: sel.name + " copy", x: sel.x + 50, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Duplicate</button>
+          <button className="btn" disabled={!isAdmin || !sel} onClick={() => { const c = { ...sel, id: "c" + uid++ , name: sel.name + " copy", y: -sel.y, groupId: null }; setComps((cs) => [...cs, c]); setSelId(c.id); }}>Mirror ↔</button>
+          <button className="btn danger" disabled={!isAdmin || !sel} onClick={() => { setComps((cs) => cs.filter((c) => c.id !== sel.id)); setSelId(null); }}>Delete</button>
         </div>
         <div className="row">
-          <button className="btn" disabled={multiSel.size < 2} onClick={groupSelected}>Group{multiSel.size >= 2 ? ` (${multiSel.size})` : ""}</button>
-          <button className="btn" disabled={!sel?.groupId} onClick={ungroupSelected}>Ungroup</button>
+          <button className="btn" disabled={!isAdmin || multiSel.size < 2} onClick={groupSelected}>Group{multiSel.size >= 2 ? ` (${multiSel.size})` : ""}</button>
+          <button className="btn" disabled={!isAdmin || !sel?.groupId} onClick={ungroupSelected}>Ungroup</button>
         </div>
-        <div className="hint" style={{ padding: "0 12px 8px" }}>Check components below, then hit Group. Dragging any member of a group moves the whole group.</div>
+        {isAdmin && <div className="hint" style={{ padding: "0 12px 8px" }}>Check components below, then hit Group. Dragging any member of a group moves the whole group.</div>}
         <div className="complist" style={{ height: listH }}>
           {comps.map((c) => (
             <div
               key={c.id}
               className={"citem" + (c.id === selId ? " on" : "")}
               onClick={() => setSelId(c.id)}
-              draggable
+              draggable={isAdmin}
               onDragStart={() => { dragCompId.current = c.id; }}
               onDragOver={(e) => { e.preventDefault(); reorderComps(c.id); }}
               onDragEnd={() => { dragCompId.current = null; }}
             >
-              <input type="checkbox" checked={multiSel.has(c.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleMultiSel(c.id)} />
+              <input type="checkbox" checked={multiSel.has(c.id)} disabled={!isAdmin} onClick={(e) => e.stopPropagation()} onChange={() => toggleMultiSel(c.id)} />
               <i style={{ background: c.color }} />
               {c.groupId && <span title="Grouped" className="groupdot">⛓</span>}
-              <input value={c.name} onChange={(e) => upd(c.id, { name: e.target.value })} onClick={(e) => e.stopPropagation()} />
+              <input value={c.name} readOnly={!isAdmin} onChange={(e) => upd(c.id, { name: e.target.value })} onClick={(e) => e.stopPropagation()} />
               <em>{c.L}×{c.W}×{c.H}</em>
             </div>
           ))}
@@ -551,36 +568,36 @@ export default function T38Packaging() {
             <div className="editor">
               <div className="sect">Exact dimensions <em>mm, before rotation</em></div>
               <div className="grid3">
-                <F sel={sel} upd={upd} label="L (x)" k="L" /><F sel={sel} upd={upd} label="W (y)" k="W" /><F sel={sel} upd={upd} label="H (z)" k="H" />
+                <F sel={sel} upd={upd} label="L (x)" k="L" disabled={!isAdmin} /><F sel={sel} upd={upd} label="W (y)" k="W" disabled={!isAdmin} /><F sel={sel} upd={upd} label="H (z)" k="H" disabled={!isAdmin} />
               </div>
               <div className="sect">Cushion <em>clearance per side</em></div>
               <div className="grid3">
-                <F sel={sel} upd={upd} label="±L" k="cL" /><F sel={sel} upd={upd} label="±W" k="cW" /><F sel={sel} upd={upd} label="±H" k="cH" />
+                <F sel={sel} upd={upd} label="±L" k="cL" disabled={!isAdmin} /><F sel={sel} upd={upd} label="±W" k="cW" disabled={!isAdmin} /><F sel={sel} upd={upd} label="±H" k="cH" disabled={!isAdmin} />
               </div>
               <div className="envelope">envelope {sel.L + 2 * sel.cL} × {sel.W + 2 * sel.cW} × {sel.H + 2 * sel.cH}</div>
               <div className="sect">Position <em>box center, part coords</em></div>
               <div className="grid3">
-                <F sel={sel} upd={upd} label="x" k="x" step={5} /><F sel={sel} upd={upd} label="y" k="y" step={5} /><F sel={sel} upd={upd} label="z" k="z" step={5} />
+                <F sel={sel} upd={upd} label="x" k="x" step={5} disabled={!isAdmin} /><F sel={sel} upd={upd} label="y" k="y" step={5} disabled={!isAdmin} /><F sel={sel} upd={upd} label="z" k="z" step={5} disabled={!isAdmin} />
               </div>
               <div className="sect">Rotation <em>deg · step
-                <select value={rotStep} onChange={(e) => setRotStep(+e.target.value)}>{[5, 15, 45, 90].map((s) => <option key={s} value={s}>{s}°</option>)}</select></em>
+                <select value={rotStep} disabled={!isAdmin} onChange={(e) => setRotStep(+e.target.value)}>{[5, 15, 45, 90].map((s) => <option key={s} value={s}>{s}°</option>)}</select></em>
               </div>
-              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rx" name="rx (roll)" />
-              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="ry" name="ry (pitch)" />
-              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rz" name="rz (yaw)" />
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rx" name="rx (roll)" disabled={!isAdmin} />
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="ry" name="ry (pitch)" disabled={!isAdmin} />
+              <RotRow sel={sel} upd={upd} rotate={rotate} rotStep={rotStep} axis="rz" name="rz (yaw)" disabled={!isAdmin} />
               <div className="sect">Color</div>
-              <div className="swatches">{PALETTE.map((p) => <b key={p} style={{ background: p, outline: sel.color === p ? "2px solid #111" : "none" }} onClick={() => upd(sel.id, { color: p })} />)}</div>
+              <div className="swatches">{PALETTE.map((p) => <b key={p} style={{ background: p, outline: sel.color === p ? "2px solid #111" : "none", cursor: isAdmin ? "pointer" : "default", opacity: isAdmin ? 1 : 0.6 }} onClick={() => isAdmin && upd(sel.id, { color: p })} />)}</div>
             </div>
           ) : (
-            <div className="hint">Select a component to edit. Drag boxes in any view — position updates on the two in-plane axes. Arrows above a selected box rotate about that view's normal axis.</div>
+            <div className="hint">{isAdmin ? "Select a component to edit. Drag boxes in any view — position updates on the two in-plane axes. Arrows above a selected box rotate about that view's normal axis." : "Select a component to view its stats."}</div>
           )}
           <div className="editor" style={{ borderTop: "1px solid #e3e3e3" }}>
             <div className="sect">Firewall <em>driver seatback plane</em></div>
             <div className="grid3">
-              <label className="fld"><span>x station</span><Num value={fw.x} step={5} onChange={(v) => setFw((f) => ({ ...f, x: v }))} /></label>
-              <label className="fld"><span>tilt °</span><Num value={fw.tilt} step={1} onChange={(v) => setFw((f) => ({ ...f, tilt: v }))} /></label>
+              <label className="fld"><span>x station</span><Num value={fw.x} step={5} disabled={!isAdmin} onChange={(v) => setFw((f) => ({ ...f, x: v }))} /></label>
+              <label className="fld"><span>tilt °</span><Num value={fw.tilt} step={1} disabled={!isAdmin} onChange={(v) => setFw((f) => ({ ...f, tilt: v }))} /></label>
               <label className="fld" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
-                <input type="checkbox" checked={fw.show} onChange={(e) => setFw((f) => ({ ...f, show: e.target.checked }))} /> show
+                <input type="checkbox" checked={fw.show} disabled={!isAdmin} onChange={(e) => setFw((f) => ({ ...f, show: e.target.checked }))} /> show
               </label>
             </div>
           </div>
@@ -589,7 +606,7 @@ export default function T38Packaging() {
             <div className="row" style={{ padding: "2px 0 8px" }}>
               {["side", "top", "rear"].map((vk) => (
                 <label key={vk} className="fld" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <input type="checkbox" checked={solidView[vk]} onChange={(e) => setSolidView((s) => ({ ...s, [vk]: e.target.checked }))} />
+                  <input type="checkbox" checked={solidView[vk]} disabled={!isAdmin} onChange={(e) => setSolidView((s) => ({ ...s, [vk]: e.target.checked }))} />
                   {vk} solid
                 </label>
               ))}
@@ -597,59 +614,63 @@ export default function T38Packaging() {
             {solidView.top && (
               <>
                 <div className="sect" style={{ margin: "6px 0 4px" }}>Raincover opening <em>Top view, mm</em></div>
-                <button
-                  className="btn"
-                  style={{ width: "100%", marginBottom: 6, background: drawMode === "raincover" ? "#4b2e83" : undefined, color: drawMode === "raincover" ? "#fff" : undefined }}
-                  onClick={() => setDrawMode((m) => (m === "raincover" ? null : "raincover"))}
-                >
-                  {drawMode === "raincover" ? "Drag on the Top view now…" : "Draw on Top view"}
-                </button>
+                {isAdmin && (
+                  <button
+                    className="btn"
+                    style={{ width: "100%", marginBottom: 6, background: drawMode === "raincover" ? "#4b2e83" : undefined, color: drawMode === "raincover" ? "#fff" : undefined }}
+                    onClick={() => setDrawMode((m) => (m === "raincover" ? null : "raincover"))}
+                  >
+                    {drawMode === "raincover" ? "Drag on the Top view now…" : "Draw on Top view"}
+                  </button>
+                )}
                 <div className="grid3">
-                  <label className="fld"><span>x min</span><Num value={windows.raincover.xMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMin: v } }))} /></label>
-                  <label className="fld"><span>x max</span><Num value={windows.raincover.xMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMax: v } }))} /></label>
+                  <label className="fld"><span>x min</span><Num value={windows.raincover.xMin} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMin: v } }))} /></label>
+                  <label className="fld"><span>x max</span><Num value={windows.raincover.xMax} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, xMax: v } }))} /></label>
                   <span />
-                  <label className="fld"><span>y min</span><Num value={windows.raincover.yMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, yMin: v } }))} /></label>
-                  <label className="fld"><span>y max</span><Num value={windows.raincover.yMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, yMax: v } }))} /></label>
+                  <label className="fld"><span>y min</span><Num value={windows.raincover.yMin} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, yMin: v } }))} /></label>
+                  <label className="fld"><span>y max</span><Num value={windows.raincover.yMax} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, raincover: { ...w.raincover, yMax: v } }))} /></label>
                 </div>
               </>
             )}
             {solidView.rear && (
               <>
                 <div className="sect" style={{ margin: "6px 0 4px" }}>Rear cutout <em>Rear view, mm</em></div>
-                <button
-                  className="btn"
-                  style={{ width: "100%", marginBottom: 6, background: drawMode === "rearCutout" ? "#4b2e83" : undefined, color: drawMode === "rearCutout" ? "#fff" : undefined }}
-                  onClick={() => setDrawMode((m) => (m === "rearCutout" ? null : "rearCutout"))}
-                >
-                  {drawMode === "rearCutout" ? "Drag on the Rear view now…" : "Draw on Rear view"}
-                </button>
+                {isAdmin && (
+                  <button
+                    className="btn"
+                    style={{ width: "100%", marginBottom: 6, background: drawMode === "rearCutout" ? "#4b2e83" : undefined, color: drawMode === "rearCutout" ? "#fff" : undefined }}
+                    onClick={() => setDrawMode((m) => (m === "rearCutout" ? null : "rearCutout"))}
+                  >
+                    {drawMode === "rearCutout" ? "Drag on the Rear view now…" : "Draw on Rear view"}
+                  </button>
+                )}
                 <div className="grid3">
-                  <label className="fld"><span>y min</span><Num value={windows.rearCutout.yMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMin: v } }))} /></label>
-                  <label className="fld"><span>y max</span><Num value={windows.rearCutout.yMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMax: v } }))} /></label>
+                  <label className="fld"><span>y min</span><Num value={windows.rearCutout.yMin} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMin: v } }))} /></label>
+                  <label className="fld"><span>y max</span><Num value={windows.rearCutout.yMax} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, yMax: v } }))} /></label>
                   <span />
-                  <label className="fld"><span>z min</span><Num value={windows.rearCutout.zMin} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, zMin: v } }))} /></label>
-                  <label className="fld"><span>z max</span><Num value={windows.rearCutout.zMax} step={5} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, zMax: v } }))} /></label>
+                  <label className="fld"><span>z min</span><Num value={windows.rearCutout.zMin} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, zMin: v } }))} /></label>
+                  <label className="fld"><span>z max</span><Num value={windows.rearCutout.zMax} step={5} disabled={!isAdmin} onChange={(v) => setWindows((w) => ({ ...w, rearCutout: { ...w.rearCutout, zMax: v } }))} /></label>
                 </div>
               </>
             )}
           </div>
-          <div className="foot">{(saved || "autosaves to shared layout storage") + " · Ctrl/Cmd+Z to undo · Delete to remove selected"}<button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button></div>
+          <div className="foot">{(saved || "autosaves to shared layout storage") + (isAdmin ? " · Ctrl/Cmd+Z to undo · Delete to remove selected" : "")}{isAdmin && <button className="link" onClick={async () => { try { await window.storage.delete(STORE_KEY); } catch (_) {} location.reload(); }}>reset layout</button>}</div>
         </div>
       </aside>
       <main className="views">
-        <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} solid={solidView.side} /></div>
+        <div className="vside"><View vk="side" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw} solid={solidView.side} isAdmin={isAdmin} /></div>
         <div className="vtop">
           <View
             vk="top" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw}
             solid={solidView.top} winRect={projectWindowRect("top", windows.raincover)}
-            drawing={drawMode === "raincover"} onDrawWindow={(b) => commitWindow("raincover", b)}
+            drawing={drawMode === "raincover"} onDrawWindow={(b) => commitWindow("raincover", b)} isAdmin={isAdmin}
           />
         </div>
         <div className="vrear">
           <View
             vk="rear" comps={comps} selId={selId} onSelect={setSelId} onDrag={(id, p) => upd(id, p)} onRotate={rotate} fw={fw} setFw={setFw}
             solid={solidView.rear} winRect={projectWindowRect("rear", windows.rearCutout)}
-            drawing={drawMode === "rearCutout"} onDrawWindow={(b) => commitWindow("rearCutout", b)}
+            drawing={drawMode === "rearCutout"} onDrawWindow={(b) => commitWindow("rearCutout", b)} isAdmin={isAdmin}
           />
         </div>
       </main>
@@ -659,30 +680,34 @@ export default function T38Packaging() {
           <span>Mockups</span>
           <button className="link" onClick={() => setDrawerOpen(false)}>close ✕</button>
         </div>
-        <div className="row" style={{ padding: "10px 12px", borderBottom: "1px solid #e3e3e3" }}>
-          <input
-            className="mockname-input"
-            style={{ flex: 1 }}
-            placeholder="Name this layout…"
-            value={mockupName}
-            onChange={(e) => setMockupName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveMockup()}
-          />
-          <button className="btn primary" disabled={!mockupName.trim()} onClick={saveMockup}>Save</button>
-        </div>
+        {isAdmin && (
+          <div className="row" style={{ padding: "10px 12px", borderBottom: "1px solid #e3e3e3" }}>
+            <input
+              className="mockname-input"
+              style={{ flex: 1 }}
+              placeholder="Name this layout…"
+              value={mockupName}
+              onChange={(e) => setMockupName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveMockup()}
+            />
+            <button className="btn primary" disabled={!mockupName.trim()} onClick={saveMockup}>Save</button>
+          </div>
+        )}
         <div className="mockcards">
-          {mockups.length === 0 && <div className="hint">No saved mockups yet — name the current layout above and save it.</div>}
+          {mockups.length === 0 && <div className="hint">No saved mockups yet{isAdmin ? " — name the current layout above and save it." : "."}</div>}
           {mockups.map((m) => (
             <div key={m.id} className="mockcard">
-              <div className="mockthumb" onClick={() => loadMockup(m)} title="Load this mockup">
+              <div className="mockthumb" onClick={() => loadMockup(m)} title={isAdmin ? "Load this mockup" : undefined} style={{ cursor: isAdmin ? "pointer" : "default" }}>
                 <MockupThumb comps={m.comps} />
               </div>
-              <input value={m.name} onChange={(e) => renameMockup(m.id, e.target.value)} />
+              <input value={m.name} readOnly={!isAdmin} onChange={(e) => renameMockup(m.id, e.target.value)} />
               <div className="mockmeta">{new Date(m.savedAt).toLocaleDateString()} · {m.comps.length} comp{m.comps.length === 1 ? "" : "s"}</div>
-              <div className="mockrow">
-                <button className="btn" onClick={() => duplicateMockup(m)}>Duplicate</button>
-                <button className="btn danger" onClick={() => deleteMockup(m.id)}>Delete</button>
-              </div>
+              {isAdmin && (
+                <div className="mockrow">
+                  <button className="btn" onClick={() => duplicateMockup(m)}>Duplicate</button>
+                  <button className="btn danger" onClick={() => deleteMockup(m.id)}>Delete</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
